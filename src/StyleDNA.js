@@ -122,69 +122,6 @@ export function addInkOutline(mesh, { thickness = 1.022, color = 0x1c1a20 } = {}
  *  painted cumulus
  * ------------------------------------------------------------------ */
 
-function paintCumulus(random, palette) {
-  const size = 512;
-  const canvas = document.createElement('canvas');
-  canvas.width = size;
-  canvas.height = Math.round(size * 0.55);
-  const ctx = canvas.getContext('2d');
-  const h = canvas.height;
-
-  // Build a stack of lobes, big at the base, smaller at the crown.
-  const lobes = 14 + Math.floor(random() * 8);
-  const baseY = h * 0.86;
-  const lobesData = [];
-  for (let i = 0; i < lobes; i += 1) {
-    const t = i / (lobes - 1);
-    const spread = Math.sin(Math.PI * t) * 0.5 + 0.5;
-    lobesData.push({
-      x: size * (0.12 + 0.76 * t) + (random() - 0.5) * size * 0.06,
-      y: baseY - h * 0.42 * Math.sin(Math.PI * Math.pow(t, 0.8)) * (0.6 + random() * 0.5),
-      r: h * (0.16 + 0.2 * spread) * (0.7 + random() * 0.5),
-    });
-  }
-
-  // Cool shadow pass.
-  ctx.fillStyle = palette.shadow;
-  for (const lobe of lobesData) {
-    ctx.beginPath();
-    ctx.arc(lobe.x, lobe.y + lobe.r * 0.12, lobe.r, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  // Lit body, biased upward so the sun reads from below-left.
-  for (const lobe of lobesData) {
-    const gradient = ctx.createRadialGradient(
-      lobe.x - lobe.r * 0.3,
-      lobe.y - lobe.r * 0.45,
-      lobe.r * 0.1,
-      lobe.x,
-      lobe.y,
-      lobe.r,
-    );
-    gradient.addColorStop(0, palette.lit);
-    gradient.addColorStop(0.72, palette.mid);
-    gradient.addColorStop(1, palette.shadow);
-    ctx.fillStyle = gradient;
-    ctx.beginPath();
-    ctx.arc(lobe.x, lobe.y, lobe.r * 0.96, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  // Flat base — clouds sat on the haze line.
-  ctx.fillStyle = palette.shadow;
-  ctx.fillRect(0, baseY, size, h - baseY);
-
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.anisotropy = 2;
-  return texture;
-}
-
-/**
- * A drifting deck of painted cloud cards. They follow the camera so the horizon
- * always has something to look at, and they never receive outlines.
- */
 export function createCloudDeck(scene, { count = 14, seed = 7 } = {}) {
   let state = seed >>> 0;
   const random = () => {
@@ -192,51 +129,106 @@ export function createCloudDeck(scene, { count = 14, seed = 7 } = {}) {
     return state / 4294967296;
   };
 
-  const palettes = [
-    { lit: '#fff4dc', mid: '#f0dcc0', shadow: '#b9a7c4' },
-    { lit: '#ffffff', mid: '#e6eff8', shadow: '#9db6cf' },
-    { lit: '#ffe4b8', mid: '#f4c79b', shadow: '#a8798f' },
-  ];
+  // Painted cumulus as actual geometry: each cloud is a cluster of squashed
+  // low-poly puffs, so it has a lit top and a shadowed underside you can see
+  // from the ground. The old billboard deck read as a fan of overlapping
+  // arcs from below, which is the one angle a cloud is always seen at.
+  const clouds = [];
+  const puffs = [];
 
-  const group = new THREE.Group();
-  group.name = 'CloudDeck';
-  scene.add(group);
-
-  const cards = [];
   for (let i = 0; i < count; i += 1) {
-    const palette = palettes[i % palettes.length];
-    const texture = paintCumulus(random, palette);
-    const material = new THREE.SpriteMaterial({
-      map: texture,
-      transparent: true,
-      depthWrite: false,
-      opacity: 0.92,
-      fog: false,
-    });
-    const sprite = new THREE.Sprite(material);
-    const angle = (i / count) * Math.PI * 2 + random() * 0.4;
-    const radius = 420 + random() * 260;
-    const height = 120 + random() * 150;
-    const scale = 190 + random() * 200;
-    sprite.position.set(Math.cos(angle) * radius, height, Math.sin(angle) * radius);
-    sprite.scale.set(scale, scale * 0.55, 1);
-    group.add(sprite);
-    cards.push({ sprite, angle, radius, height, scale, drift: 0.004 + random() * 0.006 });
+    const cloud = {
+      angle: (i / count) * Math.PI * 2 + random() * 0.5,
+      radius: 180 + random() * 240,
+      height: 88 + random() * 66,
+      scale: 58 + random() * 62,
+      drift: (0.0035 + random() * 0.005) * (random() < 0.5 ? -1 : 1),
+      phase: random() * Math.PI * 2,
+    };
+    clouds.push(cloud);
+
+    const cluster = 9 + Math.floor(random() * 6);
+    for (let k = 0; k < cluster; k += 1) {
+      const spread = cloud.scale;
+      const ox = (random() - 0.5) * 1.25 * spread;
+      const oz = (random() - 0.5) * 0.85 * spread;
+      // Puffs bunch toward the middle so the silhouette is a mound, not a bar.
+      const falloff = 1 - Math.min(1, Math.hypot(ox / spread, oz / spread));
+      const oy = (random() * 0.55 - 0.18) * spread * (0.35 + falloff) + spread * 0.12;
+      puffs.push({
+        cloud: i,
+        ox,
+        oy,
+        oz,
+        radius: spread * (0.21 + random() * 0.17),
+        flatten: 0.6 + random() * 0.25,
+        lift: falloff,
+      });
+    }
   }
 
+  const geometry = new THREE.IcosahedronGeometry(1, 1);
+  const material = new THREE.MeshStandardMaterial({
+    roughness: 1,
+    metalness: 0,
+    flatShading: true,
+    // Clouds live above the weather, so the ground fog must not eat them.
+    fog: false,
+  });
+  material.name = 'CumulusPaint';
+
+  const mesh = new THREE.InstancedMesh(geometry, material, puffs.length);
+  mesh.name = 'CloudDeck';
+  mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  // The deck surrounds the camera, so its own bounds are meaningless.
+  mesh.frustumCulled = false;
+  mesh.castShadow = false;
+  mesh.receiveShadow = false;
+
+  // Sunlit crowns fade to warm white; bellies sit in cool lavender shade.
+  const lit = new THREE.Color(0xfff6e6);
+  const belly = new THREE.Color(0x94a0c6);
+  const colour = new THREE.Color();
+  for (let i = 0; i < puffs.length; i += 1) {
+    const puff = puffs[i];
+    colour.copy(belly).lerp(lit, THREE.MathUtils.clamp(0.35 + puff.lift * 0.75, 0, 1));
+    mesh.setColorAt(i, colour);
+  }
+  if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+
+  scene.add(mesh);
+
+  const dummy = new THREE.Object3D();
+
   return {
-    group,
-    cards,
+    group: mesh,
+    clouds,
+    puffs,
     update(dt, camera) {
-      for (const card of cards) {
-        card.angle += card.drift * dt * 0.35;
-        card.sprite.position.set(
-          camera.position.x + Math.cos(card.angle) * card.radius,
-          card.height,
-          camera.position.z + Math.sin(card.angle) * card.radius,
-        );
+      const cx = camera.position.x;
+      const cz = camera.position.z;
+      for (const cloud of clouds) {
+        cloud.angle += cloud.drift * dt * 0.6;
       }
-      group.position.set(0, 0, 0);
+      for (let i = 0; i < puffs.length; i += 1) {
+        const puff = puffs[i];
+        const cloud = clouds[puff.cloud];
+        const cos = Math.cos(cloud.angle);
+        const sin = Math.sin(cloud.angle);
+        // Offset the puff in the cloud's own frame, then place the cloud on its
+        // ring around the camera.
+        dummy.position.set(
+          cx + cos * cloud.radius - sin * puff.ox,
+          cloud.height + puff.oy,
+          cz + sin * cloud.radius + cos * puff.ox,
+        );
+        dummy.position.z += puff.oz;
+        dummy.rotation.set(0, cloud.phase, 0);
+        dummy.scale.set(puff.radius, puff.radius * puff.flatten, puff.radius);
+        dummy.updateMatrix();
+        mesh.setMatrixAt(i, dummy.matrix);
+      }
+      mesh.instanceMatrix.needsUpdate = true;
     },
   };
 }

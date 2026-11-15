@@ -969,9 +969,10 @@ export class OffroadVehicle {
     this.group.quaternion.copy(this._qa);
 
     for (let i = 0; i < 4; i += 1) {
+      // The pivot now lives on the axle group, which already carries the
+      // suspension travel and the beam's roll, so only steering and spin are
+      // written here.
       const visual = this.wheelVisuals[i];
-      const wheel = WHEELS[i];
-      visual.pivot.position.set(wheel.x, TUNE.attachY - this.suspLen[i], wheel.z);
       visual.pivot.rotation.y = this.wheelSteer[i];
       visual.spin.rotation.x = this.spinAngle[i];
     }

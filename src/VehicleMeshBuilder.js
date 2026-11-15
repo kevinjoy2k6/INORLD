@@ -209,7 +209,7 @@ function createMaterials(paintHex) {
       metalness: 0.2,
     }),
     darkPlastic: new THREE.MeshStandardMaterial({ color: 0x1b1e21, roughness: 0.88, metalness: 0.06 }),
-    rubber: new THREE.MeshStandardMaterial({ color: 0x121316, roughness: 0.96, metalness: 0.0, flatShading: true }),
+    rubber: new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.94, metalness: 0.0, flatShading: true }),
     rim: new THREE.MeshStandardMaterial({ color: 0x8b9198, roughness: 0.44, metalness: 0.85 }),
     steel: new THREE.MeshStandardMaterial({ color: 0x6f757b, roughness: 0.42, metalness: 0.85 }),
     hub: new THREE.MeshStandardMaterial({ color: 0x24272b, roughness: 0.55, metalness: 0.55 }),
@@ -256,12 +256,14 @@ function createMaterials(paintHex) {
  *  with brown blotches as the tyre rolls through bog, and rinsed when it
  *  is running through water.
  * ------------------------------------------------------------------ */
+const RUBBER_HEX = '#5f5d58';
+
 function createMudMap() {
   const canvas = document.createElement('canvas');
   canvas.width = 128;
   canvas.height = 128;
   const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#141518';
+  ctx.fillStyle = RUBBER_HEX;
   ctx.fillRect(0, 0, 128, 128);
   const texture = new THREE.CanvasTexture(canvas);
   texture.wrapS = THREE.RepeatWrapping;
@@ -334,6 +336,20 @@ export class VehicleMeshBuilder {
 
     this.wheels = wheelMounts.map((mount) => this._buildWheel(mount));
     this.setTirePressure(PSI_RANGE.max);
+
+    // Wheels belong to their axle, not to the vehicle root. Parented to the
+    // root they stayed upright while the axle rolled underneath them, so on
+    // uneven ground the tyres visibly slid off the ends of the axle tubes.
+    // Mounted on the axle group they inherit its roll and hug the terrain the
+    // way a beam axle actually does.
+    for (let i = 0; i < this.wheels.length; i += 1) {
+      const mount = wheelMounts[i];
+      const wheel = this.wheels[i];
+      const axle = mount.z > 0 ? this.axles.front : this.axles.rear;
+      axle.group.add(wheel.pivot);
+      // Local to the axle: hub height is the axle origin, so y stays at zero.
+      wheel.pivot.position.set(mount.x, 0, 0);
+    }
 
     this.group.traverse((object) => {
       if (!object.isMesh) return;
@@ -1153,7 +1169,7 @@ export class VehicleMeshBuilder {
     mud.amount = Math.max(0, mud.amount - dt * 0.6);
     const { ctx, texture } = mud;
     ctx.globalAlpha = 0.25;
-    ctx.fillStyle = '#141518';
+    ctx.fillStyle = RUBBER_HEX;
     for (let i = 0; i < 4; i += 1) {
       const x = Math.random() * 128;
       const y = Math.random() * 128;

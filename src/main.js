@@ -1173,6 +1173,17 @@ function frame(now) {
   /* ---- Phase 7 systems ---- */
   const telemetry = vehicle.getTelemetry();
   atmosphere.update(dt, now, telemetry);
+  // Ground safety net. The heightfield is sampled at 2 m intervals, so a fast
+  // wheel can step over a crest between collision steps and the truck drops
+  // through the world. Catch it the same frame and put it back on the surface.
+  const bp = vehicle.body.position;
+  const groundHere = terrain.getHeightAt(bp.x, bp.z);
+  if (Number.isFinite(groundHere) && bp.y < groundHere - 1.2) {
+    bp.y = groundHere + 1.15;
+    if (vehicle.body.velocity.y < 0) vehicle.body.velocity.y = 0;
+    vehicle.body.aabbNeedsUpdate = true;
+  }
+
   landmarks.update(dt, vehicle, atmosphere.night);
   styleDNA.update(dt);
   waterSystem.update(dt, camera, atmosphere.sunDirection);
