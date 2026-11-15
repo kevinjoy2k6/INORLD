@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#0d1117" />
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="./styles.css?v=10" />
+    <link rel="stylesheet" href="./src/hud-styles.css?v=2" />
+    <title>Over The Hill — Co-Op Off-Road Expedition</title>
+  </head>
+  <body>
+    <!-- WebGL canvas mount point; everything else floats above it. -->
+    <div id="app"></div>
+
+    <!-- ============ LOBBY OVERLAY (Phase 6) ============ -->
+    <div id="lobby" class="lobby">
+      <div class="lobby-card">
+        <h1 class="lobby-title">Over The Hill</h1>
+        <p class="lobby-sub">Co-op off-road expedition · Phase 6: lobby, tactical HUD &amp; touch controls</p>
+
+        <div class="lobby-section">
+          <div class="lobby-section-head">SUV PAINT</div>
+          <div class="paint-grid" id="paint-grid"></div>
+        </div>
+
+        <div class="lobby-section">
+          <div class="lobby-section-head">ACCESSORIES</div>
+          <div class="acc-grid" id="acc-grid"></div>
+          <p class="lobby-note">Roof Rack unlocks Jerry Cans. Bullbar needs Spare Wheel.</p>
+        </div>
+
+        <div class="lobby-section">
+          <div class="lobby-section-head">PLAY</div>
+          <div class="play-row">
+            <button data-lobby="solo" class="lobby-btn primary">SOLO EXPEDITION</button>
+          </div>
+          <div class="play-row">
+            <button data-lobby="host" class="lobby-btn accent">HOST CO-OP EXPEDITION</button>
+            <button id="copy-room-code" class="lobby-btn ghost" style="display:none" title="Copy room code to clipboard">COPY ROOM CODE</button>
+          </div>
+          <div class="play-row">
+            <button data-lobby="join" class="lobby-btn ghost">JOIN CO-OP EXPEDITION</button>
+          </div>
+          <div class="join-row" id="join-row" style="display:none">
+            <input
+              id="join-code-input"
+              class="lobby-input"
+              placeholder="ROOM CODE (e.g. MUD-842)"
+              maxlength="7"
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <button data-lobby="join-go" class="lobby-btn accent">CONNECT</button>
+          </div>
+        </div>
+
+        <div class="lobby-footer">
+          <span><b>W/S</b> throttle · <b>A/D</b> steer · <b>Q/E</b> gear · <b>Space</b> handbrake</span>
+          <span><b>F</b> 4WD · <b>G</b> diff lock · <b>Z/X</b> PSI · <b>R</b> reset</span>
+          <span><b>T</b> hitch · <b>U</b> winch · <b>E</b> refuel · <b>H</b> help ping</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ TACTICAL HUD (Phase 6) ============ -->
+    <div id="hud" hidden>
+      <div class="row">
+        <div class="panel panel-title">
+          <h1 class="hud-title">Over The Hill</h1>
+          <div class="hud-net" id="hud-net">
+            <span class="hud-net-label">CO-OP</span>
+            <span class="hud-net-state" id="hud-net-state">OFFLINE</span>
+          </div>
+          <div class="hud-net-row" id="hud-net-code-row" style="display:none">
+            <span class="hud-net-label">ROOM</span>
+            <span class="hud-net-code" id="hud-net-code">—</span>
+            <button id="hud-copy-code" class="hud-icon-btn" title="Copy room code">📋</button>
+          </div>
+        </div>
+        <div class="panel panel-status">
+          <div class="stat-line"><span class="stat-k">QUALITY</span><span class="stat-v" id="hud-quality">HIGH</span></div>
+          <div class="stat-line"><span class="stat-k">FPS</span><span class="stat-v" id="hud-fps">--</span></div>
+          <div class="stat-line"><span class="stat-k">PHYSICS</span><span class="stat-v" id="hud-physics">60 Hz</span></div>
+          <div class="stat-line">
+            <span class="stat-k">CAMERA</span>
+            <span class="stat-v" id="hud-camera">OVERRIDE</span>
+            <button id="btn-camera" class="hud-toggle on" data-hud="camera" title="Toggle camera mode">CAM</button>
+          </div>
+          <div class="stat-line">
+            <span class="stat-k">TIER</span>
+            <span class="stat-v" id="hud-tier">HIGH</span>
+            <button id="btn-tier" class="hud-toggle" data-hud="tier" title="Cycle graphics tier">SWITCH</button>
+          </div>
+          <div class="stat-line">
+            <span class="stat-k">TOUCH</span>
+            <span class="stat-v" id="hud-touch-state">OFF</span>
+            <button id="btn-touch" class="hud-toggle" data-hud="touch" title="Show or hide the on-screen touch controls">UI</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="hud-dash panel" id="hud-dash">
+        <div class="dash-speed">
+          <div class="dash-speed-value">
+            <span id="hud-speed">0</span>
+            <span class="dash-unit">KM/H</span>
+          </div>
+          <div class="dash-gear" id="hud-gear">A1</div>
+        </div>
+        <div class="meter"><i id="hud-rpm-bar"></i></div>
+        <div class="dash-meters">
+          <div class="dash-m kv"><span>RPM</span><b><span id="hud-rpm">780</span></b></div>
+          <div class="dash-m kv"><span>FUEL</span><b><span id="hud-fuel">80.0</span></b><span class="dash-unit-sm">L</span></div>
+          <div class="dash-m kv"><span>BURN</span><b><span id="hud-fuel-rate">0.4</span></b><span class="dash-unit-sm">L/MIN</span></div>
+        </div>
+      </div>
+
+      <div class="panel gearbox-panel" id="panel-gearbox">
+                  <div class="gear-grid" id="gear-grid">
+          <button data-hud="gear" data-gear="L-" class="gear-btn" title="Low range, 1st">L−</button>
+          <button data-hud="gear" data-gear="L" class="gear-btn" title="Low range">L</button>
+          <button data-hud="gear" data-gear="L+" class="gear-btn" title="Low range, tall">L+</button>
+          <button data-hud="gear" data-gear="AUTO" class="gear-btn active" title="Automatic">A</button>
+          <button data-hud="gear" data-gear="H" class="gear-btn" title="High range">H</button>
+          <button data-hud="gear" data-gear="R" class="gear-btn" title="Reverse">R</button>
+        </div>
+      </div>
+
+      <div class="hud-right">
+        <div class="panel panel-actions">
+          <div class="chips">
+            <button id="btn-awd" data-hud="awd" class="chip on" title="4WD toggle (B)"><span class="chip-led"></span>AWD<kbd>B</kbd></button>
+            <button id="btn-diff" data-hud="diff" class="chip" title="Diff-lock (G)"><span class="chip-led"></span>DIFF<kbd>G</kbd></button>
+            <button id="btn-winch" data-hud="winch" class="chip danger" title="Winch pull (F)"><span class="chip-led"></span>WINCH<kbd>F</kbd></button>
+            <button id="btn-hitch" data-hud="hitch" class="chip" title="Trailer hitch (T)"><span class="chip-led"></span>HITCH<kbd>T</kbd></button>
+            <button id="btn-refuel" data-hud="refuel" class="chip" title="Refuel a teammate (E)"><span class="chip-led"></span>REFUEL<kbd>E</kbd></button>
+            <button id="btn-help" data-hud="help" class="chip" title="Ping the squad for a rescue (H)"><span class="chip-led"></span>HELP<kbd>H</kbd></button>
+          </div>
+        </div>
+
+        <div class="panel panel-psi" id="panel-psi">
+          <div class="psi-head">
+            <span class="psi-label">TYRE PSI</span>
+            <span class="psi-value" id="hud-psi">22.0</span>
+          </div>
+          <div class="psi-row">
+            <input type="range" id="psi-slider" class="psi-slider" min="8" max="35" step="0.5" value="22" />
+          </div>
+          <div class="psi-quick">
+            <button data-psi="32" class="psi-quick-btn">32 ROAD</button>
+            <button data-psi="18" class="psi-quick-btn">18 TRAIL</button>
+            <button data-psi="10" class="psi-quick-btn">10 MUD/SNOW</button>
+          </div>
+          <div class="psi-telemetry">
+            <span class="psi-telem">PATCH <b id="hud-patch">+0%</b></span>
+            <span class="psi-telem">SURFACE <b id="hud-surface">Hardpack</b></span>
+            <span class="psi-telem">SINK <b id="hud-sink">0.0</b> <span class="psi-unit-sm">CM</span></span>
+          </div>
+        </div>
+
+        <div class="panel panel-squad" id="panel-squad">
+          <div class="squad-head">
+            <span class="squad-label">SQUAD</span>
+            <span class="squad-count" id="squad-count">1/4</span>
+          </div>
+          <div class="squad-list" id="squad-list"></div>
+          <div class="squad-mission">
+            <div class="mission-row">
+              <span class="mission-label">WATCHTOWERS</span>
+              <span class="mission-value" id="hud-watchtowers">0/3</span>
+            </div>
+            <div class="mission-row">
+              <span class="mission-label">TIMBER</span>
+              <span class="mission-value" id="hud-timber">0/2</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ TOUCH UI (Phase 6) ============ -->
+    <div id="touch-ui" class="touch-ui" hidden>
+      <div class="touch-left">
+        <div class="touch-steer">
+          <button class="touch-btn steer" data-touch="steer-left" aria-label="steer left">◀</button>
+          <button class="touch-btn steer" data-touch="steer-right" aria-label="steer right">▶</button>
+        </div>
+        <div class="touch-actions">
+          <button class="touch-chip" data-touch="awd">4WD</button>
+          <button class="touch-chip" data-touch="diff">DIFF</button>
+          <button class="touch-chip" data-touch="winch">WINCH</button>
+          <button class="touch-chip" data-touch="hitch">HITCH</button>
+          <button class="touch-chip" data-touch="refuel">REFUEL</button>
+          <button class="touch-chip" data-touch="help">HELP</button>
+          <button class="touch-chip" data-touch="camera">CAM</button>
+          <button class="touch-chip" data-touch="quality">QUAL</button>
+        </div>
+      </div>
+      <div class="touch-right">
+        <div class="touch-pedals">
+          <button class="touch-btn brake" data-touch="brake" aria-label="brake">BRAKE</button>
+          <button class="touch-btn gas" data-touch="throttle" aria-label="throttle">GAS</button>
+        </div>
+        <div class="touch-psi">
+          <input type="range" id="touch-psi" class="touch-psi-slider" min="8" max="35" step="0.5" value="22" />
+          <span class="touch-psi-val" id="touch-psi-val">22 PSI</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ boot / fatal ============ -->
+    <div id="boot">
+      <div class="mark">Over The Hill</div>
+      <div class="spinner"></div>
+      <div class="sub">LOADING — TERRAIN, CHASSIS &amp; CONTROLS</div>
+    </div>
+
+    <div id="fatal">
+      <div class="box">
+        <h2>Could not start the game</h2>
+        <div id="fatal-message">An unexpected error stopped the boot sequence.</div>
+        <pre id="fatal-detail"></pre>
+      </div>
+    </div>
+
+    <div id="toast"></div>
+
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+          "cannon-es": "https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js"
+        }
+      }
+    </script>
+    <!-- PeerJS is a UMD/IIFE bundle with no ESM exports; load it classic-style
+         so it can assign window.Peer before the module graph runs. -->
+    <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.1/dist/peerjs.min.js"></script>
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
