@@ -750,14 +750,6 @@ export class TerrainSystem {
       }
     }
 
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
-    geometry.setIndex(new THREE.BufferAttribute(indices, 1));
-    geometry.computeVertexNormals();
-    geometry.computeBoundingSphere();
-
     this.detailTexture = this._buildDetailTexture();
 
     this.material = new THREE.MeshStandardMaterial({
@@ -768,13 +760,84 @@ export class TerrainSystem {
     });
     this.material.name = 'TerrainMaterial';
 
-    this.mesh = new THREE.Mesh(geometry, this.material);
+    // ---- split into chunks ----
+    // One 205,000-triangle mesh can never be culled: it is always partly on
+    // screen, so the whole world is submitted every frame. Cut into an 8x8
+    // grid and each chunk gets its own bounding sphere, so the off-screen
+    // two-thirds of the map costs nothing.
+    this.mesh = new THREE.Group();
     this.mesh.name = 'TerrainMesh';
-    this.mesh.receiveShadow = true;
-    this.mesh.castShadow = false;
     this.mesh.matrixAutoUpdate = false;
     this.mesh.updateMatrix();
     this.group.add(this.mesh);
+
+    const CHUNKS = 8;
+    const cellsPerChunk = SEGMENTS / CHUNKS;
+    const vertsPerChunk = cellsPerChunk + 1;
+    const chunkVerts = vertsPerChunk * vertsPerChunk;
+    this.chunks = [];
+
+    for (let cj = 0; cj < CHUNKS; cj += 1) {
+      for (let ci = 0; ci < CHUNKS; ci += 1) {
+        const chunkPos = new Float32Array(chunkVerts * 3);
+        const chunkCol = new Float32Array(chunkVerts * 3);
+        const chunkUv = new Float32Array(chunkVerts * 2);
+
+        // i outer, j inner so the chunk keeps the global (i * VERTS + j)
+        // vertex ordering its index buffer is built from.
+        let w = 0;
+        for (let i = 0; i < vertsPerChunk; i += 1) {
+          for (let j = 0; j < vertsPerChunk; j += 1) {
+            const src = (ci * cellsPerChunk + i) * VERTS + (cj * cellsPerChunk + j);
+            chunkPos[w * 3] = positions[src * 3];
+            chunkPos[w * 3 + 1] = positions[src * 3 + 1];
+            chunkPos[w * 3 + 2] = positions[src * 3 + 2];
+            chunkCol[w * 3] = colors[src * 3];
+            chunkCol[w * 3 + 1] = colors[src * 3 + 1];
+            chunkCol[w * 3 + 2] = colors[src * 3 + 2];
+            chunkUv[w * 2] = uvs[src * 2];
+            chunkUv[w * 2 + 1] = uvs[src * 2 + 1];
+            w += 1;
+          }
+        }
+
+        const chunkIndices = new Uint32Array(cellsPerChunk * cellsPerChunk * 6);
+        let cursor = 0;
+        for (let j = 0; j < cellsPerChunk; j += 1) {
+          for (let i = 0; i < cellsPerChunk; i += 1) {
+            const a = i * vertsPerChunk + j;
+            const b = (i + 1) * vertsPerChunk + j;
+            const c = (i + 1) * vertsPerChunk + (j + 1);
+            const d = i * vertsPerChunk + (j + 1);
+            chunkIndices[cursor] = a;
+            chunkIndices[cursor + 1] = d;
+            chunkIndices[cursor + 2] = b;
+            chunkIndices[cursor + 3] = b;
+            chunkIndices[cursor + 4] = d;
+            chunkIndices[cursor + 5] = c;
+            cursor += 6;
+          }
+        }
+
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(chunkPos, 3));
+        geo.setAttribute('color', new THREE.BufferAttribute(chunkCol, 3));
+        geo.setAttribute('uv', new THREE.BufferAttribute(chunkUv, 2));
+        geo.setIndex(new THREE.BufferAttribute(chunkIndices, 1));
+        geo.computeVertexNormals();
+        geo.computeBoundingSphere();
+
+        const chunk = new THREE.Mesh(geo, this.material);
+        chunk.name = `TerrainChunk_${ci}_${cj}`;
+        chunk.receiveShadow = true;
+        chunk.castShadow = false;
+        chunk.matrixAutoUpdate = false;
+        chunk.updateMatrix();
+        this.mesh.add(chunk);
+        this.chunks.push(chunk);
+      }
+    }
+
     this.scene.add(this.group);
   }
 
@@ -1374,7 +1437,8 @@ export class TerrainSystem {
 
   dispose() {
     this.scene.remove(this.group);
-    this.mesh.geometry.dispose();
+    if (this.chunks) for (const chunk of this.chunks) chunk.geometry.dispose();
+    this.mesh.traverse((o) => o.geometry?.dispose());
     this.material.dispose();
     this.detailTexture.dispose();
     this.water.geometry.dispose();

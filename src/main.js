@@ -1263,6 +1263,13 @@ const governor = {
 };
 
 function fpsGovernor(dt) {
+  // A backgrounded tab has its animation frames throttled to about 1 Hz, which
+  // is not the game's fault and must not make the governor slash resolution.
+  if (document.hidden) {
+    governor.stamp = 0;
+    governor.frames = 0;
+    return;
+  }
   // Wall-clock, not the clamped simulation step: dt is capped at 0.1 s for
   // physics stability, which made a 10 FPS frame look like 60 FPS to this
   // governor and stopped it ever kicking in.
