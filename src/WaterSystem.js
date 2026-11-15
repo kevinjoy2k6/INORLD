@@ -88,9 +88,18 @@ export class WaterSystem {
     // mesh itself is laid flat below.
 
     const sunDirection = new THREE.Vector3(0.55, 0.55, 0.4).normalize();
+
+    // The mirror is a whole second render of the scene: size it to the tier and
+    // refresh it less often on weaker hardware. A slightly stale reflection is
+    // invisible at driving speed; the halved fill cost is not.
+    const tier = (quality && quality.tier) || 'HIGH';
+    const mirror = tier === 'ULTRA' ? 512 : tier === 'ULTRA_LOW' || tier === 'LOW' ? 128 : 256;
+    this.mirrorSkip = mirror >= 512 ? 1 : mirror >= 256 ? 2 : 3;
+    this._frame = 0;
+
     this.water = new Water(geometry, {
-      textureWidth: 512,
-      textureHeight: 512,
+      textureWidth: mirror,
+      textureHeight: mirror,
       waterNormals: makeWaterNormals(256),
       sunDirection,
       sunColor: 0xffe6b2,
@@ -99,6 +108,14 @@ export class WaterSystem {
       fog: true,
       alpha: 0.92,
     });
+
+    // Throttle the reflection pass without touching Water's internals.
+    const mirrorPass = this.water.onBeforeRender;
+    this.water.onBeforeRender = (renderer, scene, camera, geo, mat, group) => {
+      this._frame += 1;
+      if (this.mirrorSkip > 1 && this._frame % this.mirrorSkip !== 0) return;
+      mirrorPass.call(this.water, renderer, scene, camera, geo, mat, group);
+    };
 
     this.water.name = 'MirrorWater';
     this.water.position.y = this.level;
@@ -176,7 +193,8 @@ export class WaterSystem {
 
   setQuality(tier) {
     const low = tier === 'LOW' || tier === 'COZY' || tier === 'ULTRA_LOW';
-    this.water.material.uniforms.distortionScale.value = low ? 0.35 : 0.55;
+    this.water.material.uniforms.distortionScale.value = low ? 0.4 : 0.55;
+    this.mirrorSkip = low ? 3 : 2;
     this.enabled = true;
   }
 

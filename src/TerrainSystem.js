@@ -698,6 +698,24 @@ export class TerrainSystem {
           color.lerp(tint.setHex(region.palette.ground), key === 'trail' ? 0.18 : 0.42);
         }
 
+        // The trail itself: bare packed earth worn through the grass, fading
+        // out over the shoulder instead of ending on a hard line. Painting it
+        // into the ground is why a trail looks driven-on rather than laid on.
+        if (key === 'trail' || key === 'road') {
+          const trail = this._trailDistanceAndHeight(x, z);
+          if (trail.distance < trail.width * 0.5 + 2.4) {
+            const scar = 1 - smoothstep(trail.width * 0.5, trail.width * 0.5 + 2.4, trail.distance);
+            const dirt = new THREE.Color(region.palette.dirt ?? 0x6a573c);
+            color.lerp(dirt, scar * 0.82);
+            // Tyre-worn bands, wide enough to survive the 2 m cell size.
+            const rut = Math.max(
+              1 - Math.abs(trail.distance - 0.85) / 0.6,
+              1 - Math.abs(trail.distance + 0.85) / 0.6,
+            );
+            if (rut > 0) color.multiplyScalar(1 - Math.max(0, rut) * 0.16);
+          }
+        }
+
         // Blend snow in over the alpine band, and grit into everything else.
         const snowBlend = smoothstep(30, 52, h);
         if (snowBlend > 0 && key !== 'snow') color.lerp(tint.setHex(BIOMES.snow.color), snowBlend * 0.85);

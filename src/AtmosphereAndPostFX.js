@@ -23,6 +23,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 
 /* ---- authored phases --------------------------------------------- */
 /* `t` runs 0..1 across a full day. Each phase owns its look. */
@@ -226,6 +227,52 @@ export class AtmosphereAndPostFX {
       0.95, // threshold
     );
     this.composer.addPass(this.bloom);
+
+    // Film grade: lift saturation, add a gentle S-curve and split the shadows
+    // cool and the highlights warm. This is what stops the toon shading from
+    // reading as flat grey paste under the fog.
+    this.grade = new ShaderPass({
+      uniforms: {
+        tDiffuse: { value: null },
+        saturation: { value: 1.22 },
+        contrast: { value: 1.1 },
+        lift: { value: 0.015 },
+        warm: { value: new THREE.Vector3(1.04, 1.0, 0.94) },
+        cool: { value: new THREE.Vector3(0.93, 0.98, 1.09) },
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+        }`,
+      fragmentShader: `
+        uniform sampler2D tDiffuse;
+        uniform float saturation;
+        uniform float contrast;
+        uniform float lift;
+        uniform vec3 warm;
+        uniform vec3 cool;
+        varying vec2 vUv;
+
+        void main() {
+          vec4 texel = texture2D( tDiffuse, vUv );
+          vec3 c = texel.rgb;
+
+          float luma = dot( c, vec3( 0.299, 0.587, 0.114 ) );
+          c = mix( vec3( luma ), c, saturation );
+          c = ( c - 0.5 ) * contrast + 0.5 + lift;
+
+          float shadowWeight = 1.0 - smoothstep( 0.0, 0.55, luma );
+          float highlightWeight = smoothstep( 0.45, 1.0, luma );
+          c *= mix( vec3( 1.0 ), cool, shadowWeight * 0.55 );
+          c *= mix( vec3( 1.0 ), warm, highlightWeight * 0.4 );
+
+          gl_FragColor = vec4( clamp( c, 0.0, 1.0 ), texel.a );
+        }`,
+    });
+    this.composer.addPass(this.grade);
+
     this.composer.addPass(new OutputPass());
 
     this.composer.setSize(size.x, size.y);
@@ -241,6 +288,7 @@ export class AtmosphereAndPostFX {
   setPostProcessing(on) {
     this.composerEnabled = !!on;
     if (this.bloom) this.bloom.enabled = this.composerEnabled;
+    if (this.grade) this.grade.enabled = this.composerEnabled;
   }
 
   /** Phase 8: how far the world is drawn; fog is clamped to hide the cut. */

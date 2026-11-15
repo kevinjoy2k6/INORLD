@@ -92,7 +92,7 @@ export class Landmarks {
     this.scene.add(this.group);
 
     this.stations = [];
-    this.stats = { poles: 0, dashes: 0, stations: 0, signs: 0 };
+    this.stats = { poles: 0, ruts: 0, stations: 0, signs: 0 };
     this.fuelRate = 14; // litres per second while parked on an apron
     this.status = null;
 
@@ -134,8 +134,6 @@ export class Landmarks {
 
     const polePositions = [];
     const poleYaw = [];
-    const dashPositions = [];
-    const dashYaw = [];
     const wirePairs = [];
 
     for (const road of ROADS) {
@@ -154,15 +152,6 @@ export class Landmarks {
         poleYaw.push(Math.atan2(p.dirX, p.dirZ));
       });
 
-      // Dashes down the middle of the carriageway.
-      if (isRoad) {
-        walkPath(road.points, 7, (p) => {
-          const ground = terrain.getHeightAt(p.x, p.z);
-          if (terrain.waterGrid[terrain._indexAt(p.x, p.z)] > 0) return;
-          dashPositions.push({ x: p.x, y: ground + 0.045, z: p.z });
-          dashYaw.push(Math.atan2(p.dirX, p.dirZ));
-        });
-      }
     }
 
     /* ---- pole trunks + crossarms as instances ---- */
@@ -235,30 +224,6 @@ export class Landmarks {
       }
     }
 
-    /* ---- centre-line dashes ---- */
-    const D = dashPositions.length;
-    if (D > 0) {
-      const dashGeo = new THREE.BoxGeometry(3.2, 0.04, 0.18);
-      const dashes = new THREE.InstancedMesh(dashGeo, m.paint, D);
-      dashes.instanceMatrix.setUsage(THREE.StaticDrawUsage);
-      const matrix = new THREE.Matrix4();
-      const quat = new THREE.Quaternion();
-      const pos = new THREE.Vector3();
-      const scale = new THREE.Vector3(1, 1, 1);
-      const euler = new THREE.Euler();
-      for (let i = 0; i < D; i += 1) {
-        const d = dashPositions[i];
-        euler.set(0, dashYaw[i], 0);
-        quat.setFromEuler(euler);
-        pos.set(d.x, d.y, d.z);
-        matrix.compose(pos, quat, scale);
-        dashes.setMatrixAt(i, matrix);
-      }
-      dashes.count = D;
-      dashes.receiveShadow = true;
-      this.group.add(dashes);
-      this.stats.dashes = D;
-    }
   }
 
   /* ---------------- gas stations ---------------- */

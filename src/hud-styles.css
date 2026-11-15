@@ -1406,3 +1406,96 @@ body.photo-active #xh-touch {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ============================================================================
+ * Legibility + contrast pass
+ *
+ * The panels are glass over a bright painterly world. At the old opacity the
+ * cream type and the outline buttons dissolved into the sky. These overrides
+ * keep the same language — slate glass, amber instruments — but push the
+ * contrast far enough that everything reads at a glance in daylight.
+ * ========================================================================== */
+
+:root {
+  --xh-slate: rgba(14, 17, 20, 0.86);
+  --xh-slate-solid: #101418;
+  --xh-cream-dim: rgba(248, 244, 236, 0.78);
+  --xh-line: rgba(248, 244, 236, 0.2);
+  --xh-blur: blur(6px);
+  --xh-shadow: 0 12px 34px rgba(0, 0, 0, 0.55);
+}
+
+.xh-panel,
+#xh-pill,
+#xh-psi,
+#xh-topbar .xh-btn,
+.xh-psi-buttons .xh-btn,
+.xh-hold {
+  border: 1px solid var(--xh-line);
+  box-shadow: var(--xh-shadow), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+}
+
+#xh-hud {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+}
+
+/* Small outline buttons over the sky need their own dark bed. */
+#xh-topbar .xh-btn,
+.xh-psi-buttons .xh-btn,
+.xh-psi-presets .xh-btn {
+  background: rgba(14, 17, 20, 0.78) !important;
+  color: var(--xh-cream);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+
+#xh-topbar .xh-btn:hover,
+.xh-psi-buttons .xh-btn:hover {
+  border-color: var(--xh-amber);
+  color: #fff;
+}
+
+.xh-label {
+  letter-spacing: 0.16em;
+  color: rgba(248, 244, 236, 0.72);
+  font-weight: 600;
+}
+
+.xh-value {
+  color: #fff;
+  font-weight: 700;
+}
+
+.xh-room,
+.xh-squad-name,
+.xh-mission-row span {
+  color: rgba(248, 244, 236, 0.85);
+}
+
+.xh-pill-title {
+  color: var(--xh-amber);
+  letter-spacing: 0.2em;
+}
+
+/* The pressure readout is the one number you look at while driving. */
+#xh-psi .xh-value,
+.xh-gauge-readout {
+  color: #fff;
+  font-weight: 700;
+}
+
+.xh-hold {
+  background: rgba(14, 17, 20, 0.82);
+  color: var(--xh-cream);
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+
+.xh-hold:active {
+  background: var(--xh-amber);
+  color: #14100a;
+}
+
+.xh-progress {
+  background: rgba(0, 0, 0, 0.45);
+}

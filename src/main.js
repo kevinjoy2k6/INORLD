@@ -1176,6 +1176,9 @@ function frame(now) {
   landmarks.update(dt, vehicle, atmosphere.night);
   styleDNA.update(dt);
   waterSystem.update(dt, camera, atmosphere.sunDirection);
+  // Adaptive resolution: hold frame rate by bleeding pixels, then restore them.
+  // Cheaper than cutting world detail, and invisible while driving fast.
+  fpsGovernor(dt);
   tactile.update(dt, now, telemetry);
   if (provingBench) {
     provingBench.update(dt);
@@ -1247,6 +1250,51 @@ function frame(now) {
 }
 
 // Handy from the browser console: __game.vehicle.setPSI(10), __game.quality.setTier('LOW'), etc.
+/* ------------------------------------------------------------------ *
+ *  Frame-rate governor
+ * ------------------------------------------------------------------ */
+
+const governor = {
+  cap: Math.min(window.devicePixelRatio || 1, 2),
+  current: Math.min(window.devicePixelRatio || 1, 2),
+  accumulator: 0,
+  frames: 0,
+  fps: 60,
+};
+
+function fpsGovernor(dt) {
+  // Wall-clock, not the clamped simulation step: dt is capped at 0.1 s for
+  // physics stability, which made a 10 FPS frame look like 60 FPS to this
+  // governor and stopped it ever kicking in.
+  const now = performance.now();
+  if (!governor.stamp) governor.stamp = now;
+  governor.accumulator = (now - governor.stamp) / 1000;
+  governor.frames += 1;
+  if (governor.accumulator < 0.75) return;
+
+  governor.stamp = now;
+  governor.fps = governor.frames / governor.accumulator;
+  governor.accumulator = 0;
+  governor.frames = 0;
+
+  const target = 50;
+  let next = governor.current;
+
+  if (governor.fps < target - 8 && governor.current > 0.62) {
+    next = Math.max(0.62, governor.current - 0.14);
+  } else if (governor.fps > target + 12 && governor.current < governor.cap) {
+    next = Math.min(governor.cap, governor.current + 0.08);
+  }
+
+  if (Math.abs(next - governor.current) > 0.01) {
+    governor.current = next;
+    renderer.setPixelRatio(next);
+    window.__fpsScale = +next.toFixed(2);
+  }
+}
+
+window.__governor = governor;
+
 window.__game = {
   scene, camera, renderer, world, vehicle, trailer, quality, cameraController,
   terrain, rutSystem, networkManager, winchSystem, missionManager, ui,

@@ -279,9 +279,23 @@ export class OffroadVehicle {
       angularDamping: 0.34,
       allowSleep: false,
     });
+    // Same belly line as the original box (so the body sits on its wheels
+    // exactly as before), but shorter and with rounded skid spheres front and
+    // rear. A square corner digs into a crest and stops the truck dead; a
+    // sphere rides over the same crest.
+    const bellyY = TUNE.chassisOffsetY - 0.52; // -0.46: the old box floor
+    const skidRadius = 0.3;
     body.addShape(
-      new CANNON.Box(new CANNON.Vec3(0.9, 0.52, 2.06)),
-      new CANNON.Vec3(0, TUNE.chassisOffsetY, 0),
+      new CANNON.Box(new CANNON.Vec3(0.86, 0.36, 1.84)),
+      new CANNON.Vec3(0, bellyY + 0.36, 0),
+    );
+    body.addShape(
+      new CANNON.Sphere(skidRadius),
+      new CANNON.Vec3(0, bellyY + skidRadius, 1.9),
+    );
+    body.addShape(
+      new CANNON.Sphere(skidRadius),
+      new CANNON.Vec3(0, bellyY + skidRadius, -1.9),
     );
     body.position.set(spawn.x, spawn.y, spawn.z);
     body.collisionFilterGroup = PHYS_GROUPS.VEHICLE;
@@ -457,6 +471,16 @@ export class OffroadVehicle {
    * interpolate the whole tick instead of just the last sub-step.
    */
   beginFrame() {
+    // A tunnelled contact or a degenerate suspension solve can push the body to
+    // a non-finite pose. Once a CANNON body goes NaN it never recovers, and
+    // every system downstream (camera, audio, HUD) inherits the poison and the
+    // screen goes black. Catch it here and rebuild at the spawn point instead.
+    const p = this.body.position;
+    if (!Number.isFinite(p.x) || !Number.isFinite(p.y) || !Number.isFinite(p.z)) {
+      console.warn('[vehicle] non-finite pose, recovering at spawn');
+      this.reset();
+      return;
+    }
     this._prevPos.set(this.body.position.x, this.body.position.y, this.body.position.z);
     this._prevQuat.set(this.body.quaternion.x, this.body.quaternion.y, this.body.quaternion.z, this.body.quaternion.w);
   }

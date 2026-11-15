@@ -43,6 +43,20 @@ function saturationCurve(amount = 2.2) {
   return curve;
 }
 
+/* ------------------------------------------------------------------ *
+ *  AudioParam writes
+ *
+ *  Web Audio throws a TypeError when an AudioParam is handed a non-finite
+ *  value, and one NaN inside the engine model used to take the whole game
+ *  down with it. Every smoothing write goes through here: a bad frame skips
+ *  its step instead of killing the session.
+ * ------------------------------------------------------------------ */
+
+function smoothParam(param, value, time, constant) {
+  if (!param || !Number.isFinite(value) || !Number.isFinite(time)) return;
+  param.setTargetAtTime(value, time, Number.isFinite(constant) ? constant : 0.1);
+}
+
 export class ProceduralAudio {
   constructor({ vehicle, winchSystem = null, camera = null, quality = null }) {
     this.vehicle = vehicle;
@@ -515,10 +529,14 @@ export class ProceduralAudio {
     const t = telemetry || this.vehicle.getTelemetry();
     const now = this.ctx.currentTime;
 
-    const rpm = t.rpm || 700;
-    const rpmPct = clamp01(t.rpmPct ?? 0);
-    const speed = Math.abs(t.speedKmh || 0);
-    const throttle = Math.max(0, Math.min(1, context.throttle ?? 0));
+    // Every value below feeds an AudioParam. Web Audio throws a TypeError on a
+    // non-finite value and that killed the whole game, so nothing unguarded is
+    // allowed through.
+    const num = (v, fallback) => (Number.isFinite(v) ? v : fallback);
+    const rpm = Math.max(0, num(t.rpm, 700));
+    const rpmPct = clamp01(num(t.rpmPct, 0));
+    const speed = Math.abs(num(t.speedKmh, 0));
+    const throttle = clamp01(num(context.throttle, 0));
     // A shift briefly lifts the throttle: that pause is what makes a gearbox
     // feel like a gearbox.
     this._throttleCut = Math.max(0, this._throttleCut - dt * 3.4);
@@ -530,24 +548,24 @@ export class ProceduralAudio {
     const running = t.engineOn !== false;
     const level = running ? clamp01(0.1 + load * 0.24 + rpmPct * 0.1) : 0;
 
-    this.oscA.frequency.setTargetAtTime(firingHz, now, 0.05);
-    this.oscB.frequency.setTargetAtTime(firingHz * 2, now, 0.05);
-    this.oscC.frequency.setTargetAtTime(firingHz * 0.5, now, 0.05);
-    this.exhaustLfo.frequency.setTargetAtTime(firingHz, now, 0.05);
+    smoothParam(this.oscA.frequency, firingHz, now, 0.05);
+    smoothParam(this.oscB.frequency, firingHz * 2, now, 0.05);
+    smoothParam(this.oscC.frequency, firingHz * 0.5, now, 0.05);
+    smoothParam(this.exhaustLfo.frequency, firingHz, now, 0.05);
 
     // Exhaust opens with load, not just rpm: that is what makes lugging sound
     // different from revving.
-    this.engineFilter.frequency.setTargetAtTime(240 + rpmPct * 900 + load * 1150, now, 0.08);
-    this.combBand.frequency.setTargetAtTime(150 + rpmPct * 190, now, 0.1);
-    this.combGain.gain.setTargetAtTime((0.2 + load * 0.14) * (running ? 1 : 0), now, 0.08);
-    this.intakeGain.gain.setTargetAtTime(running ? throttle * 0.05 : 0, now, 0.1);
-    this.intakeBand.frequency.setTargetAtTime(700 + rpmPct * 700, now, 0.12);
-    this.engineBus.gain.setTargetAtTime(level * this.engineVolume, now, 0.08);
+    smoothParam(this.engineFilter.frequency, 240 + rpmPct * 900 + load * 1150, now, 0.08);
+    smoothParam(this.combBand.frequency, 150 + rpmPct * 190, now, 0.1);
+    smoothParam(this.combGain.gain, (0.2 + load * 0.14) * (running ? 1 : 0), now, 0.08);
+    smoothParam(this.intakeGain.gain, running ? throttle * 0.05 : 0, now, 0.1);
+    smoothParam(this.intakeBand.frequency, 700 + rpmPct * 700, now, 0.12);
+    smoothParam(this.engineBus.gain, level * this.engineVolume, now, 0.08);
 
     // Turbo: spools up under sustained load only.
     const turboLevel = load > 0.62 ? (load - 0.62) * 0.9 : 0;
-    this.turbo.gain.setTargetAtTime(turboLevel * 0.045, now, 0.25);
-    this.turboOsc.frequency.setTargetAtTime(1500 + rpmPct * 2600, now, 0.2);
+    smoothParam(this.turbo.gain, turboLevel * 0.045, now, 0.25);
+    smoothParam(this.turboOsc.frequency, 1500 + rpmPct * 2600, now, 0.2);
 
     /* ---- tyre scrub: slip you can hear ---- */
     const slip = t.slip || [0, 0, 0, 0];
@@ -556,8 +574,8 @@ export class ProceduralAudio {
     slipAvg /= Math.max(1, slip.length);
     const motionNow = clamp01(speed / 30);
     const scrub = clamp01(slipAvg * 1.6) * (0.03 + motionNow * 0.09);
-    this.tyreGain.gain.setTargetAtTime(scrub * this.ambienceVolume, now, 0.08);
-    this.tyreBand.frequency.setTargetAtTime(520 + motionNow * 1100, now, 0.15);
+    smoothParam(this.tyreGain.gain, scrub * this.ambienceVolume, now, 0.08);
+    smoothParam(this.tyreBand.frequency, 520 + motionNow * 1100, now, 0.15);
 
     /* ---- meadow rustle when the wheels are in vegetation ---- */
     const wheels = this.vehicle?.wheelSurface || [];
@@ -572,19 +590,19 @@ export class ProceduralAudio {
     this._surfaceKey = key;
     const profile = SURFACE_PROFILES[key] || SURFACE_PROFILES.trail;
     const motion = clamp01(speed / 26);
-    this.surfaceGain.gain.setTargetAtTime(profile.gain * motion * 0.55 * this.ambienceVolume, now, 0.12);
-    this.surfaceBand.frequency.setTargetAtTime(profile.band * (0.8 + motion * 0.5), now, 0.15);
-    this.surfaceBand.Q.setTargetAtTime(profile.q, now, 0.15);
+    smoothParam(this.surfaceGain.gain, profile.gain * motion * 0.55 * this.ambienceVolume, now, 0.12);
+    smoothParam(this.surfaceBand.frequency, profile.band * (0.8 + motion * 0.5), now, 0.15);
+    smoothParam(this.surfaceBand.Q, profile.q, now, 0.15);
     // Playing back faster at speed is what makes the crunch read as motion.
     if (this.surfaceSrc) {
-      this.surfaceSrc.playbackRate.setTargetAtTime(0.65 + motion * 1.15, now, 0.2);
+      smoothParam(this.surfaceSrc.playbackRate, 0.65 + motion * 1.15, now, 0.2);
     }
 
     /* ---- wind: rises with altitude, never loud ---- */
     const y = this.vehicle.body.position.y;
     const altitude = clamp01((y - 6) / 70);
-    this.windGain.gain.setTargetAtTime((0.03 + altitude * 0.14) * this.ambienceVolume, now, 0.4);
-    this.windFilter.frequency.setTargetAtTime(520 + altitude * 900, now, 0.4);
+    smoothParam(this.windGain.gain, (0.03 + altitude * 0.14) * this.ambienceVolume, now, 0.4);
+    smoothParam(this.windFilter.frequency, 520 + altitude * 900, now, 0.4);
 
     /* ---- river proximity ---- */
     const terrain = context.terrain;
@@ -603,15 +621,15 @@ export class ProceduralAudio {
         }
       }
     }
-    this.waterGain.gain.setTargetAtTime(waterNear * 0.22 * this.ambienceVolume, now, 0.5);
+    smoothParam(this.waterGain.gain, waterNear * 0.22 * this.ambienceVolume, now, 0.5);
 
     /* ---- winch whine ---- */
     const winch = this.winchSystem;
     const tension = winch?.cableTension || 0;
     const winching = !!winch?.activeAnchor;
-    this.winchGain.gain.setTargetAtTime(winching ? 0.05 + Math.min(1, tension / 16000) * 0.09 : 0, now, 0.15);
-    this.winchFilter.frequency.setTargetAtTime(700 + Math.min(1, tension / 16000) * 1500, now, 0.2);
-    this.winchOsc.frequency.setTargetAtTime(90 + Math.min(1, tension / 16000) * 180, now, 0.2);
+    smoothParam(this.winchGain.gain, winching ? 0.05 + Math.min(1, tension / 16000) * 0.09 : 0, now, 0.15);
+    smoothParam(this.winchFilter.frequency, 700 + Math.min(1, tension / 16000) * 1500, now, 0.2);
+    smoothParam(this.winchOsc.frequency, 90 + Math.min(1, tension / 16000) * 180, now, 0.2);
 
     /* ---- discrete events ---- */
     if (this._lastGear !== null && t.gearId !== this._lastGear) this.shiftKick(0.9);
@@ -648,7 +666,7 @@ export class ProceduralAudio {
       this._birdTimer = 3.5 + Math.random() * 7;
       const quiet = 1 - clamp01(speed / 45);
       if (this.ambienceVolume > 0.08 && quiet > 0.25) {
-        if (this.birdGain) this.birdGain.gain.setTargetAtTime(0.5 * quiet * this.ambienceVolume, now, 0.5);
+        if (this.birdGain) smoothParam(this.birdGain.gain, 0.5 * quiet * this.ambienceVolume, now, 0.5);
         this.chirp();
       }
     }
@@ -685,7 +703,7 @@ export class ProceduralAudio {
 
   setVolume(v) {
     this.masterVolume = clamp01(v);
-    if (this.master) this.master.gain.setTargetAtTime(this.masterVolume, this.ctx.currentTime, 0.1);
+    if (this.master) smoothParam(this.master.gain, this.masterVolume, this.ctx.currentTime, 0.1);
   }
 
   getStats() {
