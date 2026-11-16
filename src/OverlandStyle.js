@@ -143,6 +143,22 @@ export class OverlandStyle {
     }
     this.scene.background = this._fogColour.set(preset.fogColour).clone();
 
+    // Hand the look to the atmosphere instead of writing the lights here. The
+    // phase system runs every frame; a second writer makes the sun, ambient
+    // and fog oscillate between two values, which reads as the world strobing.
+    if (typeof this.atmosphere?.setStyleOverride === 'function') {
+      this.atmosphere.setStyleOverride({
+        sunColor: new THREE.Color(preset.sunColour),
+        sunIntensity: preset.sunIntensity,
+        hemiColor: new THREE.Color(preset.skyColour),
+        hemiGround: new THREE.Color(preset.groundColour),
+        hemiIntensity: preset.hemiIntensity,
+        fogColor: new THREE.Color(preset.fogColour),
+        fogDensity: preset.fogDensity,
+        exposure: preset.exposure,
+      });
+    }
+
     this.globalUniforms.uGlobalWetness.value = preset.wetness;
     return preset;
   }
@@ -156,25 +172,11 @@ export class OverlandStyle {
     return nextName;
   }
 
-  /** Reassert sun/ambient/fog after the day-night phase system writes its own. */
+  /**
+   * Advance shared time. Lighting is not written here: the atmosphere owns it
+   * and applies the preset as its single per-frame write.
+   */
   tick(dt) {
     this.globalUniforms.uTime.value += dt;
-    const preset = STYLE_PRESETS[this.preset];
-    if (!preset) return;
-
-    const atmosphere = this.atmosphere;
-    if (atmosphere?.sun) {
-      atmosphere.sun.color.lerp(new THREE.Color(preset.sunColour), Math.min(1, dt * 8));
-      atmosphere.sun.intensity = preset.sunIntensity;
-    }
-    if (atmosphere?.hemisphere) {
-      atmosphere.hemisphere.color.lerp(new THREE.Color(preset.skyColour), Math.min(1, dt * 8));
-      atmosphere.hemisphere.groundColor.lerp(new THREE.Color(preset.groundColour), Math.min(1, dt * 8));
-      atmosphere.hemisphere.intensity = preset.hemiIntensity;
-    }
-    if (this.scene.fog) {
-      this.scene.fog.density = preset.fogDensity;
-      this.scene.fog.color.lerp(this._fogColour, Math.min(1, dt * 8));
-    }
   }
 }

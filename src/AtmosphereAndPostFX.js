@@ -140,6 +140,11 @@ export class AtmosphereAndPostFX {
     this.time = 0.28; // start in golden hour
     this.running = true;
     this.phase = PHASES[1];
+    // A style preset can lock the lights to a fixed look. This is the ONLY
+    // other writer of sun/ambient/fog besides the phase blend below, and it is
+    // applied as part of that single write. Two systems each setting the sun
+    // every frame makes the whole world strobe.
+    this.styleOverride = null;
     this.night = false;
     this.weather = 'clear';
     this.daySeconds = DAY_SECONDS;
@@ -374,6 +379,16 @@ export class AtmosphereAndPostFX {
   }
 
   /**
+   * Lock (or release, with null) a fixed lighting look on top of the phase
+   * cycle. Applied inside applyPhase so there is still only one writer per
+   * frame.
+   */
+  setStyleOverride(override) {
+    this.styleOverride = override || null;
+    this.applyPhase(0, true);
+  }
+
+  /**
    * Blend the two neighbouring phases into the live lights/sky/fog.
    * `force` regenerates the environment map immediately.
    */
@@ -413,6 +428,18 @@ export class AtmosphereAndPostFX {
     this.baseFogDensity = lerp(a.fogDensity, b.fogDensity, smooth);
 
     this.renderer.toneMappingExposure = lerp(a.exposure, b.exposure, smooth);
+
+    const style = this.styleOverride;
+    if (style) {
+      if (style.sunColor) this.sun.color.copy(style.sunColor);
+      if (style.sunIntensity != null) this.sun.intensity = style.sunIntensity;
+      if (style.hemiColor) this.hemisphere.color.copy(style.hemiColor);
+      if (style.hemiGround) this.hemisphere.groundColor.copy(style.hemiGround);
+      if (style.hemiIntensity != null) this.hemisphere.intensity = style.hemiIntensity;
+      if (style.fogColor) this.scene.fog.color.copy(style.fogColor);
+      if (style.fogDensity != null) this.baseFogDensity = style.fogDensity;
+      if (style.exposure != null) this.renderer.toneMappingExposure = style.exposure;
+    }
 
     const bloomStrength = lerp(a.bloom, b.bloom, smooth);
     if (this.bloom) this.bloom.strength = bloomStrength;

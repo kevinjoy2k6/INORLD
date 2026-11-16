@@ -236,6 +236,11 @@ export class OffroadVehicle {
     this.suspLen = new Float32Array(4).fill(TUNE.restLength);
     this.prevLen = new Float32Array(4).fill(TUNE.restLength);
     this.springForce = new Float32Array(4);
+    // Ray length is heavily smoothed before it drives the damper. The terrain
+    // is faceted, so the raw distance to the ground steps at every facet edge;
+    // feeding that step into a spring damper turns a 3 cm ledge into a
+    // thousands-of-newtons spike and the truck bucks.
+    this.smoothLen = new Float32Array(4).fill(TUNE.restLength);
     this.arbForce = new Float32Array(4);
     this.load = new Float32Array(4).fill((TUNE.chassisMass * 9.82) / 4);
     this.omega = new Float32Array(4);
@@ -625,6 +630,43 @@ export class OffroadVehicle {
       const hit = this.world.raycastClosest(attach, rayEnd, this.rayOptions, this.rayResult);
 
       if (!hit) {
+        // Rescue cast. If the strut has sunk so far that its downward ray now
+        // starts below the surface (a crest, a landing, a steep facet), the
+        // ray finds nothing and the truck is treated as airborne — so it keeps
+        // falling through ground that is visibly right there. Cast back up
+        // from below the failed ray end to see whether it is underground.
+        const under = new CANNON.Vec3(
+          rayEnd.x - down.x * 1.6,
+          rayEnd.y - down.y * 1.6,
+          rayEnd.z - down.z * 1.6,
+        );
+        this.rayResult.reset();
+        const rescue = this.world.raycastClosest(under, attach, this.rayOptions, this.rayResult);
+        if (rescue) {
+          const buried = this.rayResult.distance + effRadius;
+          const surf = this.surfaceProvider
+            ? this.surfaceProvider(this.rayResult.hitPointWorld.x, this.rayResult.hitPointWorld.z)
+            : SURFACES.hardpack;
+          this.grounded[i] = true;
+          this.suspLen[i] = clamp(buried, minLen, maxLen);
+          this.comp[i] = TUNE.restLength - this.suspLen[i];
+          this.smoothLen[i] = this.suspLen[i];
+          this.prevLen[i] = this.suspLen[i];
+          this.sink[i] = Math.max(0, buried - TUNE.restLength + effRadius);
+          this.springForce[i] = TUNE.springStiffness * this.comp[i];
+          this.load[i] = this.springForce[i];
+          this.wheelSurface[i] = surf;
+          this.contactNormal[i].set(0, 1, 0);
+          this.contactPoint[i].set(
+            this.rayResult.hitPointWorld.x,
+            this.rayResult.hitPointWorld.y,
+            this.rayResult.hitPointWorld.z,
+          );
+          groundedCount += 1;
+          sinkTotal += this.sink[i];
+          continue;
+        }
+
         this.grounded[i] = false;
         this.suspLen[i] = maxLen;
         this.comp[i] = -TUNE.maxDroop;
@@ -670,11 +712,22 @@ export class OffroadVehicle {
       this.suspLen[i] = length;
       this.comp[i] = TUNE.restLength - length;
 
-      const compressionVelocity = this._firstStep ? 0 : (this.prevLen[i] - length) / dt;
-      const damping = compressionVelocity > 0 ? TUNE.dampingCompression : TUNE.dampingRebound;
-      const force = TUNE.springStiffness * this.comp[i] + damping * compressionVelocity;
+      // Low-pass the ray length at ~18 Hz: fast enough to follow a bump,
+      // slow enough that facet edges are ironed out.
+      this.smoothLen[i] += (length - this.smoothLen[i]) * Math.min(1, dt * 18);
+      const smoothComp = TUNE.restLength - this.smoothLen[i];
 
-      this.springForce[i] = Math.max(0, force);
+      let compressionVelocity = this._firstStep ? 0 : (this.prevLen[i] - length) / dt;
+      // A damper that sees a 60 cm step in one frame produces an absurd force.
+      // Real shock absorbers are velocity-limited by their valving; clamp to a
+      // plausible 2.2 m/s of shaft speed.
+      compressionVelocity = clamp(compressionVelocity, -2.2, 2.2);
+      const damping = compressionVelocity > 0 ? TUNE.dampingCompression : TUNE.dampingRebound;
+      const force = TUNE.springStiffness * smoothComp + damping * compressionVelocity;
+
+      // Force ceiling: a wheel can hold up a corner of the truck, not launch it.
+      const maxStrutForce = (TUNE.chassisMass * 9.82) * 1.15;
+      this.springForce[i] = clamp(force, 0, maxStrutForce);
       this.load[i] = this.springForce[i];
       this.prevLen[i] = length;
       this.grounded[i] = true;
@@ -705,7 +758,8 @@ export class OffroadVehicle {
 
     for (let i = 0; i < 4; i += 1) {
       if (!this.grounded[i]) continue;
-      const total = Math.max(0, this.springForce[i] + this.arbForce[i]);
+      const arbLimit = (TUNE.chassisMass * 9.82) * 0.45;
+      const total = clamp(this.springForce[i] + this.arbForce[i], 0, arbLimit);
       this.load[i] = total;
       this.body.applyLocalForce(
         new CANNON.Vec3(0, total, 0),
