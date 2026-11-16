@@ -398,12 +398,32 @@ export class TerrainSystem {
 
     // The main network from the atlas grades corridors through every region.
     this.pathWidths = [3.4, 3.0];
-    const paths = [loop, spur];
+    // The loop and spur above are authored in the atlas' 640 m design space
+    // like everything else, so they have to be stretched with the world —
+    // otherwise they stay a tiny ring in the middle of a 2 km map.
+    const scalePath = (path) => path.map(([x, z]) => [x * WORLD_SCALE, z * WORLD_SCALE]);
+    const paths = [scalePath(loop), scalePath(spur)];
     for (const road of ROADS) {
       paths.push(road.points);
       this.pathWidths.push(road.width);
     }
     this.roadPaths = ROADS;
+
+    // Per-path bounding box, used to skip paths that cannot possibly be the
+    // nearest. With eleven paths over 174k grid points this is the difference
+    // between a 20 second load and a fast one.
+    this.pathBounds = paths.map((path, index) => {
+      let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+      for (const [x, z] of path) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (z < minZ) minZ = z;
+        if (z > maxZ) maxZ = z;
+      }
+      const margin = (this.pathWidths[index] ?? 3) + 8;
+      return { minX: minX - margin, maxX: maxX + margin, minZ: minZ - margin, maxZ: maxZ + margin };
+    });
+
     return paths;
   }
 
@@ -470,7 +490,10 @@ export class TerrainSystem {
     if (!this.trailHeights) return { distance: Infinity, height: 0, width: 3 };
     const widths = this.pathWidths || [];
     let best = null;
+    const bounds = this.pathBounds;
     for (let p = 0; p < this.trailPoints.length; p += 1) {
+      const box = bounds && bounds[p];
+      if (box && (x < box.minX || x > box.maxX || z < box.minZ || z > box.maxZ)) continue;
       const path = this.trailPoints[p];
       const heights = this.trailHeights[p];
       for (let i = 1; i < path.length; i += 1) {
@@ -516,6 +539,11 @@ export class TerrainSystem {
       this.provingDatum = resolveDatum((x, z) => this._baseHeight(x, z));
     }
 
+    // The nearest-path search is the expensive part of generation, and it was
+    // being redone in the height, surface and colour passes — three times the
+    // work for the same answer. Solve it once into a grid and read the grid.
+    this._buildTrailField();
+
     for (let j = 0; j < VERTS; j += 1) {
       const z = -this.halfSize + j * ELEMENT;
       for (let i = 0; i < VERTS; i += 1) {
@@ -526,7 +554,7 @@ export class TerrainSystem {
 
         // Flatten the corridor to the path's own grade. Roads cut wider than
         // trails so they read as graded carriageway rather than a footpath.
-        const trail = this._trailDistanceAndHeight(x, z);
+        const trail = this._trailFieldAt(x, z);
         const corridor = trail.width + 5;
         if (trail.distance < corridor) {
           const inner = trail.width * 0.6;
@@ -557,6 +585,45 @@ export class TerrainSystem {
     this._classifyBiomes();
   }
 
+  /**
+   * Nearest trail/path distance, grade height and width, sampled once on the
+   * terrain grid. Generation passes read this instead of searching the paths
+   * again, which is roughly a third of the boot cost on a 2 km map.
+   */
+  _buildTrailField() {
+    const count = VERTS * VERTS;
+    const distance = new Float32Array(count);
+    const height = new Float32Array(count);
+    const width = new Float32Array(count);
+
+    for (let j = 0; j < VERTS; j += 1) {
+      const z = -this.halfSize + j * ELEMENT;
+      for (let i = 0; i < VERTS; i += 1) {
+        const x = -this.halfSize + i * ELEMENT;
+        const index = i * VERTS + j;
+        // Direct search here: this IS the field being built.
+        const trail = this._trailDistanceAndHeight(x, z);
+        distance[index] = trail.distance === Infinity ? 1e9 : trail.distance;
+        height[index] = trail.height;
+        width[index] = trail.width;
+      }
+    }
+
+    this.trailField = { distance, height, width };
+  }
+
+  /** Field lookup with the same shape as _trailDistanceAndHeight. */
+  _trailFieldAt(x, z) {
+    const field = this.trailField;
+    if (!field) return this._trailDistanceAndHeight(x, z);
+    let i = Math.round((x + this.halfSize) / ELEMENT);
+    let j = Math.round((z + this.halfSize) / ELEMENT);
+    i = i < 0 ? 0 : i > VERTS - 1 ? VERTS - 1 : i;
+    j = j < 0 ? 0 : j > VERTS - 1 ? VERTS - 1 : j;
+    const index = i * VERTS + j;
+    return { distance: field.distance[index], height: field.height[index], width: field.width[index] };
+  }
+
   _classifyBiomes() {
     const bog = this.bogCentre();
 
@@ -576,7 +643,7 @@ export class TerrainSystem {
 
         const riverDistance = Math.abs(z - this.riverZ(x));
         const bogDistance = Math.hypot(x - bog.x, z - bog.z);
-        const trail = this._trailDistanceAndHeight(x, z);
+        const trail = this._trailFieldAt(x, z);
 
         const region = regionAt(x, z);
         let key = 'hardpack';
@@ -757,7 +824,7 @@ export class TerrainSystem {
         // out over the shoulder instead of ending on a hard line. Painting it
         // into the ground is why a trail looks driven-on rather than laid on.
         if (key === 'trail' || key === 'road') {
-          const trail = this._trailDistanceAndHeight(x, z);
+          const trail = this._trailFieldAt(x, z);
           if (trail.distance < trail.width * 0.5 + 2.4) {
             const scar = 1 - smoothstep(trail.width * 0.5, trail.width * 0.5 + 2.4, trail.distance);
             const dirt = new THREE.Color(region.palette.dirt ?? 0x6a573c);
@@ -993,9 +1060,9 @@ export class TerrainSystem {
     const poleMaterial = new THREE.MeshStandardMaterial({ color: 0x6d5433, roughness: 0.9 });
 
     // Counts scale with the map area, or 2 km reads as an empty plain.
-    const TREES = 1150;
-    const BOULDERS = 520;
-    const POLES = 150;
+    const TREES = 1900;
+    const BOULDERS = 900;
+    const POLES = 260;
 
     const trunkMesh = new THREE.InstancedMesh(trunkGeometry, trunkMaterial, TREES);
     const pineMesh = new THREE.InstancedMesh(pineGeometry, pineMaterial, TREES);
@@ -1030,7 +1097,7 @@ export class TerrainSystem {
       if (slope > 0.42) continue;
       if (key === 'mud' || key === 'water' || key === 'sand') continue;
       if (this.waterGrid[index] > 0) continue;
-      const trail = this._trailDistanceAndHeight(x, z);
+      const trail = this._trailFieldAt(x, z);
       if (trail.distance < trail.width + 5) continue;
 
       const density = fbm(this.noiseD, x * 0.012, z * 0.012, 3);
@@ -1084,7 +1151,7 @@ export class TerrainSystem {
       const key = BIOME_KEYS[this.biomeGrid[index]];
       if (this.inProvingGround(x, z)) continue;
       if (key === 'water' || this.waterGrid[index] > 0) continue;
-      const road = this._trailDistanceAndHeight(x, z);
+      const road = this._trailFieldAt(x, z);
       if (road.distance < road.width + 3.5) continue;
 
       const radius = 0.55 + random() * 1.5;
@@ -1420,7 +1487,7 @@ export class TerrainSystem {
     // meadow reads as bare ground with a few spikes on it. Grass is one
     // instanced draw of six triangles per blade and casts no shadow, so the
     // count can go up an order of magnitude for almost nothing.
-    const grass = makePatch('grass', grassGeo, grassMat, 24000, ({ h, key, slope, density, random }) => {
+    const grass = makePatch('grass', grassGeo, grassMat, 46000, ({ h, key, slope, density, random }) => {
       if (h < 3.4 || h > 34) return false;
       if (slope > 0.45) return false;
       if (key === 'water' || key === 'rock' || key === 'mud' || key === 'snow') return false;
@@ -1451,7 +1518,7 @@ export class TerrainSystem {
       softenNormal: 0.45,
     });
 
-    const ferns = makePatch('fern', fernGeo, fernMat, 4000, ({ h, key, slope, density, random }) => {
+    const ferns = makePatch('fern', fernGeo, fernMat, 8000, ({ h, key, slope, density, random }) => {
       if (h < 3.6 || h > 26) return false;
       if (slope > 0.5) return false;
       if (key !== 'hardpack' && key !== 'trail') return false;
@@ -1477,7 +1544,7 @@ export class TerrainSystem {
       softenNormal: 0.7,
     });
 
-    const reeds = makePatch('reed', reedGeo, reedMat, 1400, ({ h, key, random }) => {
+    const reeds = makePatch('reed', reedGeo, reedMat, 2600, ({ h, key, random }) => {
       if (h < WATER_LEVEL + 0.05 || h > WATER_LEVEL + 2.1) return false;
       if (key === 'water') return false;
       return random() < 0.75;
@@ -1494,7 +1561,7 @@ export class TerrainSystem {
     bushMat.userData.baseColor = new THREE.Color(0xa9b9a6);
     this._patchFoliageMaterial(bushMat, { sway: 0.14, rootY: 0, topY: 0.8, bend: 0.32 });
 
-    const bushes = makePatch('bush', bushGeo, bushMat, 1050, ({ h, key, slope, random }) => {
+    const bushes = makePatch('bush', bushGeo, bushMat, 2100, ({ h, key, slope, random }) => {
       if (h < 14 || slope > 0.55) return false;
       if (key !== 'snow' && key !== 'rock') return false;
       return random() < 0.65;
