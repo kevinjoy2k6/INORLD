@@ -107,7 +107,7 @@ export function vehicleSnapshot(ta) {
     wheelRot: round(ta.wheelRotation ?? 0, 2),
     wheelSink: (ta.wheelSink || [0, 0, 0, 0]).map((v) => round(v, 3)),
     psi: round(ta.psi ?? 22, 1),
-    paint: ta.paintHex || PAINT_COLORS.sand.hex,
+    paint: ta.paintHex || PAINT_COLORS.yellow.hex,
     accessories: ta.accessories || null,
     a: ta.awd ? 1 : 0,
     hb: ta.handbrake ? 1 : 0,
@@ -141,7 +141,7 @@ class RemotePlayer {
     this.wheelRot = 0;
     this.wheelSink = [0, 0, 0, 0];
     this.psi = 22;
-    this.paint = PAINT_COLORS.sand.hex;
+    this.paint = PAINT_COLORS.yellow.hex;
     this.accessories = null;
     this.awd = 0;
     this.handbrake = 0;
@@ -425,7 +425,7 @@ export class NetworkManager {
     return {
       id: 'local',
       name: this.localName,
-      paint: ta.paintHex || PAINT_COLORS.sand.hex,
+      paint: ta.paintHex || PAINT_COLORS.yellow.hex,
       accessories: ta.accessories || null,
       psi: ta.psi ?? 22,
       pos: [this.vehicle.body.position.x, this.vehicle.body.position.y, this.vehicle.body.position.z],
@@ -722,7 +722,7 @@ export class NetworkManager {
     }
 
     player = new RemotePlayer(id, name);
-    player.paint = paint || PAINT_COLORS.sand.hex;
+    player.paint = paint || PAINT_COLORS.yellow.hex;
     player.accessories = accessories || null;
     player.psi = psi ?? 22;
     player.conn = connection || null;

@@ -27,15 +27,16 @@ import * as THREE from 'three';
 /* ------------------------------------------------------------------ *
  *  Paint colours available to co-op players
  * ------------------------------------------------------------------ */
+/* High-contrast pop colours, so the hero vehicle reads against the naturals. */
 export const PAINT_COLORS = {
-  sand: { id: 'sand', label: 'Sand Tan', hex: 0xc9a86a },
-  olive: { id: 'olive', label: 'Olive Green', hex: 0x5f6b3c },
-  orange: { id: 'orange', label: 'Rescue Orange', hex: 0xd4622a },
-  blue: { id: 'blue', label: 'Alpine Blue', hex: 0x3d6b8c },
-  white: { id: 'white', label: 'Alpine White', hex: 0xdcdcd2 },
+  yellow: { id: 'yellow', label: 'Expedition Yellow', hex: 0xe8c638 },
+  teal: { id: 'teal', label: 'Field Teal', hex: 0x389890 },
+  rust: { id: 'rust', label: 'Cargo Red', hex: 0xd9383a },
+  cream: { id: 'cream', label: 'Chalk Cream', hex: 0xe6e1d3 },
+  slate: { id: 'slate', label: 'Slate Blue', hex: 0x4a5d75 },
 };
 
-export const PAINT_ORDER = ['sand', 'olive', 'orange', 'blue', 'white'];
+export const PAINT_ORDER = ['yellow', 'teal', 'rust', 'cream', 'slate'];
 
 /* ------------------------------------------------------------------ *
  *  Tyre pressure helpers — shared with the physics so the visual bulge
@@ -275,7 +276,7 @@ function createMudMap() {
 
 export class VehicleMeshBuilder {
   constructor({
-    paint = PAINT_COLORS.sand.hex,
+    paint = PAINT_COLORS.yellow.hex,
     wheelRadius = 0.46,
     wheelWidth = 0.3,
     comHeight = 0.98,

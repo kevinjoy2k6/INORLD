@@ -154,29 +154,32 @@ export class WaterSystem {
     material.fragmentShader = material.fragmentShader
       .replace(
         'uniform vec3 waterColor;',
-        'uniform vec3 waterColor;\n\t\t\t\tvarying float vDepth;\n\t\t\t\tuniform float shoreTint;',
+        'uniform vec3 waterColor;\n\t\t\t\tvarying float vDepth;\n\t\t\t\tuniform float shoreTint;\n\t\t\t\tuniform vec3 shallowTint;\n\t\t\t\tuniform vec3 foamColour;',
       )
       .replace(
         'gl_FragColor = vec4( outgoingLight, alpha );',
         `
-        // ---- shoreline: shallow tint, thinning alpha, crawling foam ----
+        // ---- stylised depth ramp + binary shoreline foam ----
+        // Shallow water is translucent grey-tan, deep water saturated turquoise,
+        // with a hard step of white foam exactly at the waterline. No gradient
+        // smoke: the style wants crisp cut-outs.
         float depth = max( vDepth, 0.0 );
-        float shallow = 1.0 - smoothstep( 0.25, 2.6, depth );
-        float foamBand = 1.0 - smoothstep( 0.0, 0.55, depth );
+        float shallow = 1.0 - smoothstep( 0.1, 1.4, depth );
 
-        vec3 bedTint = vec3( 0.42, 0.72, 0.68 );
-        outgoingLight = mix( outgoingLight, bedTint, shallow * 0.32 * shoreTint );
+        outgoingLight = mix( outgoingLight, shallowTint, shallow * 0.42 * shoreTint );
 
-        float ripple = 0.5 + 0.5 * sin( depth * 26.0 - time * 2.2 + surfaceNormal.x * 6.0 );
-        float foam = foamBand * smoothstep( 0.35, 1.0, ripple ) * shoreTint;
-        outgoingLight += vec3( 0.85, 0.93, 0.92 ) * foam * 0.22;
+        float ripple = 0.5 + 0.5 * sin( depth * 18.0 - time * 1.6 + surfaceNormal.x * 4.0 );
+        float foam = ( 1.0 - smoothstep( 0.0, 0.45, depth ) ) * step( 0.55, ripple ) * shoreTint;
+        outgoingLight = mix( outgoingLight, foamColour, foam );
 
-        float alphaOut = mix( 0.62, alpha, smoothstep( 0.0, 1.6, depth ) );
-        alphaOut = min( 1.0, alphaOut + foam * 0.35 );
+        float alphaOut = mix( 0.58, alpha, smoothstep( 0.0, 1.2, depth ) );
+        alphaOut = max( alphaOut, foam );
         gl_FragColor = vec4( outgoingLight, alphaOut );`,
       );
 
     material.uniforms.shoreTint = { value: 1 };
+    material.uniforms.shallowTint = { value: new THREE.Color(0x9ba8a4) };
+    material.uniforms.foamColour = { value: new THREE.Color(0xffffff) };
   }
 
   /** Called every frame: feed the clock, the sun and the camera position. */

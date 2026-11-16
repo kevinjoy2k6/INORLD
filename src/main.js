@@ -20,6 +20,7 @@ import { ACCESSORIES, ACCESSORY_ORDER, PAINT_COLORS, PAINT_ORDER } from './Vehic
 import { Landmarks } from './Landmarks.js';
 import { StyleDNA } from './StyleDNA.js';
 import { WaterSystem } from './WaterSystem.js';
+import { StyleOverhaul, applyStylePalette } from './StyleOverhaul.js';
 import { regionAt } from './WorldAtlas.js';
 import {
   createProvingProps,
@@ -197,6 +198,10 @@ world.addContactMaterial(
  *  Terrain
  * ================================================================== */
 
+// The palette is baked into terrain vertex colours at build time, so it has
+// to be applied before the terrain exists.
+applyStylePalette();
+
 const terrain = new TerrainSystem({
   scene,
   world,
@@ -235,7 +240,7 @@ const vehicle = new OffroadVehicle({
   scene,
   spawn: terrain.spawn.position,
   heading: terrain.spawn.heading,
-  paint: PAINT_COLORS.sand.hex,
+  paint: PAINT_COLORS.yellow.hex,
   groundMaterial,
   surfaceProvider: (x, z) => terrain.getSurfaceAt(x, z),
   localPlayerId: 'player-1',
@@ -432,6 +437,15 @@ const toonMaterials = styleDNA.celShadeVehicle()
 // Mirror water with a depth-shaded shore, modelled on Tidelight Harbor.
 const waterSystem = new WaterSystem({ scene, terrain, atmosphere, quality });
 waterSystem.setQuality(quality.tier || 'HIGH');
+const styleOverhaul = new StyleOverhaul({
+  scene,
+  atmosphere,
+  renderer,
+  terrain,
+  vehicle,
+  water: waterSystem,
+  styleDNA,
+});
 
 const tactile = new TactileVFX({ scene, vehicle, trailer, terrain, quality });
 
@@ -1187,6 +1201,7 @@ function frame(now) {
   landmarks.update(dt, vehicle, atmosphere.night);
   styleDNA.update(dt);
   waterSystem.update(dt, camera, atmosphere.sunDirection);
+  styleOverhaul.tick(Math.min(1, dt * 6));
   // Adaptive resolution: hold frame rate by bleeding pixels, then restore them.
   // Cheaper than cutting world detail, and invisible while driving fast.
   fpsGovernor(dt);
@@ -1319,7 +1334,7 @@ window.__game = {
   atmosphere, tactile, audio,
   optimizer, settingsUI, expeditionHUD,
   test: provingBench, testHud: provingHud, provingGround: TEST_MODE ? PROVING_GROUND : null,
-  landmarks, styleDNA, regionAt, waterSystem,
+  landmarks, styleDNA, regionAt, waterSystem, styleOverhaul,
 };
 
 // Phase 7 adds a lot of new shader programs (wind-blown foliage, beams, post

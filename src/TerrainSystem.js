@@ -695,7 +695,7 @@ export class TerrainSystem {
         // the coast bleached sand, the ridge cold grey-green.
         const region = regionAt(x, z);
         if (key !== 'water' && key !== 'mud') {
-          color.lerp(tint.setHex(region.palette.ground), key === 'trail' ? 0.18 : 0.42);
+          color.lerp(tint.setHex(region.palette.ground), key === 'trail' ? 0.28 : 0.62);
         }
 
         // The trail itself: bare packed earth worn through the grass, fading
@@ -720,7 +720,9 @@ export class TerrainSystem {
         const snowBlend = smoothstep(30, 52, h);
         if (snowBlend > 0 && key !== 'snow') color.lerp(tint.setHex(BIOMES.snow.color), snowBlend * 0.85);
 
-        const grit = 0.84 + (this.noiseD(x * 0.14, z * 0.14) * 0.5 + 0.5) * 0.3;
+        // Flat-shaded style: no per-pixel ground noise. A 2% break-up only
+        // keeps huge fields from reading as one solid colour swatch.
+        const grit = 0.98 + (this.noiseD(x * 0.045, z * 0.045) * 0.5 + 0.5) * 0.04;
         color.multiplyScalar(grit);
 
         // Wet sheen on the riverbed and bog floor.
