@@ -146,7 +146,10 @@ export class StyleOverhaul {
           transparent: material.transparent,
           opacity: material.opacity,
           side: material.side,
-          map: keepMaps ? material.map : null,
+          // Keep any texture the material already had. The tyres carry their
+          // tread and mud in a canvas map on a white base colour; dropping the
+          // map here left four brilliant white wheels on the truck.
+          map: material.map || null,
         });
         flat.userData.flatShaded = true;
         flat.name = material.name;

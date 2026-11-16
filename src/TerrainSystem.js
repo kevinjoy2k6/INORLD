@@ -257,6 +257,50 @@ export const BIOMES = {
  *  TerrainSystem
  * ================================================================== */
 
+/**
+ * A single tuft of prairie grass: three tapered blades crossed around the
+ * vertical axis.
+ *
+ * The cone this replaces was one closed spike — from any distance a meadow of
+ * them reads as a field of green traffic cones. Three crossed triangles cost
+ * the same three triangles (double-sided, so each blade shows from both
+ * sides), and because they are flat planes the root-to-tip ramp shades them as
+ * a soft sheet instead of shading a cone's facets.
+ */
+function createGrassTuftGeometry(height = 1.35, halfWidth = 0.09) {
+  const positions = [];
+  const normals = [];
+  const uvs = [];
+
+  const BLADES = 3;
+  for (let b = 0; b < BLADES; b += 1) {
+    // Blades fan around the trunk, each leaning slightly so the tuft has a
+    // silhouette from every angle.
+    const angle = (b / BLADES) * Math.PI * 2 + 0.35;
+    const dx = Math.cos(angle);
+    const dz = Math.sin(angle);
+    const lean = 0.16;
+    const tall = height * (0.82 + 0.18 * ((b + 1) / BLADES));
+
+    positions.push(
+      -dx * halfWidth, 0, -dz * halfWidth,
+      dx * halfWidth, 0, dz * halfWidth,
+      dx * lean, tall, dz * lean,
+    );
+    // Up-facing normals: the material patch re-aims them anyway, but this
+    // keeps the raw geometry sane if the patch is ever skipped.
+    normals.push(0, 1, 0, 0, 1, 0, 0, 1, 0);
+    uvs.push(0, 0, 1, 0, 0.5, 1);
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geometry.computeBoundingSphere();
+  return geometry;
+}
+
 const SIZE = WORLD.size;
 // 176 cells over 640 m = 3.6 m facets. The flat-shaded style wants planes you
 // can read as planes; 2 m cells were small enough to look smooth.
@@ -1340,8 +1384,7 @@ export class TerrainSystem {
     };
 
     /* --- tall prairie grass --- */
-    const grassGeo = new THREE.ConeGeometry(0.15, 1.35, 3, 1, true);
-    grassGeo.translate(0, 0.675, 0);
+    const grassGeo = createGrassTuftGeometry(1.35, 0.09);
     const grassMat = new THREE.MeshStandardMaterial({
       color: 0x8a9a4a,
       roughness: 0.92,
