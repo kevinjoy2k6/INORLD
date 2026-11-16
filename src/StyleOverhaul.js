@@ -34,7 +34,7 @@ export const PALETTE = {
   skyUpper: 0xe4eff7,
   sun: 0xfff0d6,
   ambientSky: 0xd8e2f0,
-  ambientGround: 0xe5b887,
+  ambientGround: 0xf0cfa0,
   vehicleYellow: 0xe8c638,
   vehicleTeal: 0x389890,
   vehicleRed: 0xd9383a,
@@ -170,7 +170,18 @@ export class StyleOverhaul {
     // Props, landmarks, the truck and the trailer all go matte and faceted.
     const roots = [this.terrain?.group, this.styleDNA?.scene];
     for (const root of roots) {
-      if (root) this.flatShade(root, { skip: ['MirrorWater', 'SkyDome'] });
+      if (root) this.flatShade(root, { skip: ['MirrorWater', 'SkyDome', 'StyleSky'] });
+    }
+
+    // The 64 terrain chunks each ended up with their own cloned material, which
+    // meant 64 material switches per frame and only one of them face-shaded.
+    // Collapse them onto one shared material and turn flat shading on.
+    const chunks = this.terrain?.chunks || [];
+    if (chunks.length) {
+      const groundMaterial = chunks[0].material;
+      groundMaterial.flatShading = true;
+      groundMaterial.needsUpdate = true;
+      for (const chunk of chunks) chunk.material = groundMaterial;
     }
   }
 
@@ -265,7 +276,7 @@ export class StyleOverhaul {
     if (atmosphere.hemisphere) {
       atmosphere.hemisphere.color.lerp(this.skyColour, k);
       atmosphere.hemisphere.groundColor.lerp(this.groundColour, k);
-      atmosphere.hemisphere.intensity = 1.05;
+      atmosphere.hemisphere.intensity = 1.25;
     }
 
     const fog = this.scene?.fog;

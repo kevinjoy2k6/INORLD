@@ -258,7 +258,9 @@ export const BIOMES = {
  * ================================================================== */
 
 const SIZE = WORLD.size;
-const SEGMENTS = 320;
+// 176 cells over 640 m = 3.6 m facets. The flat-shaded style wants planes you
+// can read as planes; 2 m cells were small enough to look smooth.
+const SEGMENTS = 176;
 const ELEMENT = SIZE / SEGMENTS;
 const VERTS = SEGMENTS + 1;
 const WATER_LEVEL = 1.1;
@@ -724,6 +726,15 @@ export class TerrainSystem {
         // keeps huge fields from reading as one solid colour swatch.
         const grit = 0.98 + (this.noiseD(x * 0.045, z * 0.045) * 0.5 + 0.5) * 0.04;
         color.multiplyScalar(grit);
+
+        // Broad green patches through the gold. Without this the meadow is one
+        // flat ochre field; with it the ground reads as grassland with damp
+        // hollows, in two flat tone bands rather than a gradient.
+        if (key !== 'water' && key !== 'mud' && key !== 'snow' && key !== 'trail') {
+          const patch = this.noiseD(x * 0.012 + 40, z * 0.012 - 15);
+          const green = THREE.MathUtils.clamp((patch + 0.22) * 1.9, 0, 1);
+          if (green > 0) color.lerp(tint.setHex(0x6f8d43), green * 0.5);
+        }
 
         // Wet sheen on the riverbed and bog floor.
         if (key === 'water' || key === 'mud') color.multiplyScalar(0.86);
