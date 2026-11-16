@@ -24,12 +24,35 @@ import { StyleOverhaul, applyStylePalette } from './StyleOverhaul.js';
 import { OverlandStyle } from './OverlandStyle.js';
 import { regionAt } from './WorldAtlas.js';
 import {
+
+
   createProvingProps,
   createProvingBench,
   createProvingHud,
   auditProvingGround,
   PROVING_GROUND,
 } from './ProvingGround.js';
+/* ---- boot watchdog -------------------------------------------------
+ * Records how long the world took to build and, more importantly, how
+ * long the main thread was ever blocked. Terrain generation is sliced, so
+ * the second number should stay small even though the first is not.
+ * ------------------------------------------------------------------ */
+const bootWatch = { start: performance.now(), buildMs: 0, marks: [], longTasks: [] };
+const bootMark = (label) => bootWatch.marks.push([label, Math.round(performance.now() - bootWatch.start)]);
+window.__boot = bootWatch;
+try {
+  new PerformanceObserver((list) => {
+    for (const entry of list.getEntries()) {
+      bootWatch.longTasks.push({
+        ms: Math.round(entry.duration),
+        at: Math.round(entry.startTime - bootWatch.start),
+      });
+    }
+  }).observe({ entryTypes: ['longtask'] });
+} catch {
+  // longtask observer is not available everywhere; the build time still is.
+}
+
 
 /* ================================================================== *
  *  DOM + error plumbing
@@ -212,6 +235,17 @@ const terrain = new TerrainSystem({
   testMode: TEST_MODE,
 });
 
+// Generating 2 km of terrain is tens of millions of samples. It is built in
+// slices that hand the main thread back every few milliseconds, so the boot
+// screen keeps animating and the tab never locks up; the await here only
+// delays the systems below, which all need a finished world.
+await terrain.build((fraction, label) => {
+  const sub = document.querySelector('#boot .sub');
+  if (sub) sub.textContent = `LOADING ${Math.round(fraction * 100)}% — ${label}`;
+});
+bootWatch.buildMs = Math.round(performance.now() - bootWatch.start);
+bootMark('terrain');
+
 // Surveyed test range: flat pad, washboard, whoops, articulation ramps, side
 // slope, hill climb, mud pit, sand and an obstacle lane.
 if (TEST_MODE) {
@@ -223,6 +257,7 @@ if (TEST_MODE) {
 
 // Poles, centre lines, junction signs and gas stations: the human layer.
 const landmarks = new Landmarks({ scene, terrain, groundMaterial });
+bootMark('landmarks');
 
 // Tyre ruts: a render-target stamp map on HIGH/MEDIUM, decal ribbons on LOW.
 const rutSystem = new RutSystem({
@@ -237,6 +272,7 @@ const rutSystem = new RutSystem({
  *  Vehicle
  * ================================================================== */
 
+bootMark('ruts');
 const vehicle = new OffroadVehicle({
   world,
   scene,
@@ -361,6 +397,7 @@ networkManager.missionManager = missionManager;
  *  Camera
  * ================================================================== */
 
+bootMark('hud');
 const cameraController = new CameraController(camera, {
   vehicle,
   trailer,
@@ -412,6 +449,7 @@ function toast(text) {
  *  Phase 7 — atmosphere/post-FX, tactile mechanical detail, audio
  * ================================================================== */
 
+bootMark('vehicle');
 const atmosphere = new AtmosphereAndPostFX({
   renderer,
   scene,
@@ -432,11 +470,13 @@ atmosphere.fogScale = 0.34;
 
 // Style DNA: toon hard surfaces, ink the hero truck, painted cumulus, region
 // grading. The truck is cel-shaded once its material set is final.
+bootMark('atmosphere');
 const styleDNA = new StyleDNA({ scene, camera, atmosphere, vehicle, quality });
 const toonMaterials = styleDNA.celShadeVehicle()
   + styleDNA.celShadeProps([landmarks.group, missionManager.group]);
 
 // Mirror water with a depth-shaded shore, modelled on Tidelight Harbor.
+bootMark('styledna');
 const waterSystem = new WaterSystem({ scene, terrain, atmosphere, quality });
 waterSystem.setQuality(quality.tier || 'HIGH');
 const overlandStyle = new OverlandStyle({
@@ -447,6 +487,7 @@ const overlandStyle = new OverlandStyle({
   onToast: (message) => toast(message),
 });
 
+bootMark('water');
 const styleOverhaul = new StyleOverhaul({
   scene,
   atmosphere,
@@ -457,7 +498,9 @@ const styleOverhaul = new StyleOverhaul({
   styleDNA,
 });
 
+bootMark('overhaul');
 const tactile = new TactileVFX({ scene, vehicle, trailer, terrain, quality });
+bootMark('tactilevfx');
 
 // Test-range instrumentation: samples the real physics while you drive.
 const provingBench = TEST_MODE ? createProvingBench({ vehicle, terrain }) : null;
@@ -509,6 +552,7 @@ vehicle.shiftDown = () => {
  *  Phase 8 — performance governor, settings drawer, expedition HUD
  * ================================================================== */
 
+bootMark('optimizer-start');
 const optimizer = new PerformanceOptimizer({
   renderer,
   scene,
@@ -537,6 +581,7 @@ const settingsUI = new GraphicsSettingsUI({
   audio,
 });
 
+bootMark('tactile');
 const expeditionHUD = new ExpeditionHUD({
   optimizer,
   vehicle,
@@ -1144,6 +1189,10 @@ function readDriverInput(dt) {
 }
 
 function frame(now) {
+  if (!bootWatch.firstFrame) {
+    bootWatch.firstFrame = Math.round(performance.now() - bootWatch.start);
+    bootMark('first-frame');
+  }
   requestAnimationFrame(frame);
 
   const dt = Math.min(0.1, (now - lastTime) / 1000);
@@ -1354,5 +1403,23 @@ window.__game = {
 // passes). Link them up front so the first frames never draw a half-linked
 // program while the driver is still compiling in parallel.
 renderer.compile(scene, camera);
+
+/* ---- pre-compile shaders -------------------------------------------------
+ * Every material in the scene compiles on the first draw. That is one huge
+ * task — on a software renderer it froze the tab for eight seconds after the
+ * world was already built. compileAsync hands compilation to the driver and
+ * yields between programs, so the boot screen keeps animating.
+ * ------------------------------------------------------------------------ */
+bootMark('pre-first-frame');
+try {
+  if (typeof renderer.compileAsync === 'function') {
+    await renderer.compileAsync(scene, camera);
+  } else {
+    renderer.compile(scene, camera);
+  }
+} catch (error) {
+  console.warn('Shader pre-compile failed; the first frame will compile instead.', error);
+}
+bootMark('compiled');
 
 requestAnimationFrame(frame);

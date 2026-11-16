@@ -372,15 +372,58 @@ export class TerrainSystem {
     }
 
     this.trailPoints = this._buildTrailLayout();
+    this.built = false;
+    this.progress = 0;
+  }
 
-    this._generateHeightGrid();
-    this._buildMesh();
-    this._buildPhysics();
+  /* ---------------- sliced build ---------------- */
+
+  /**
+   * Build the 2 km world without freezing the page.
+   *
+   * Generation is tens of millions of samples. Done in one pass it is a
+   * single seven-second task and the browser cannot paint, respond to a
+   * click, or even show a spinner. Every heavy loop below yields the main
+   * thread whenever it has run for more than a few milliseconds, so the
+   * boot screen stays live and the tab never reports as unresponsive.
+   */
+  async build(onProgress = null) {
+    const report = (fraction, label) => {
+      this.progress = fraction;
+      if (onProgress) onProgress(fraction, label);
+    };
+
+    report(0.03, 'GRADING TRAILS');
+    await this._generateHeightGrid();
+
+    report(0.38, 'BUILDING GROUND');
+    await this._buildMesh();
+
+    report(0.62, 'SOLID GROUND');
+    await this._buildPhysics();
     this._buildWater();
-    this._scatter();
-    this._buildFoliage();
+
+    report(0.74, 'PLANTING');
+    await this._scatter();
+
+    report(0.84, 'SEEDING THE MEADOW');
+    await this._buildFoliage();
 
     this.spawn = this._resolveSpawn();
+    this.built = true;
+    report(1, 'READY');
+  }
+
+  /**
+   * Yield to the browser if this slice has used its budget. Returns the
+   * timestamp to measure the next slice from.
+   */
+  async _slice(mark) {
+    // 6 ms keeps every task well under a frame at 60 Hz, which is what stops
+    // the page feeling locked while generation runs.
+    if (performance.now() - mark < 6) return mark;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    return performance.now();
   }
 
   /* ---------------- layout ---------------- */
@@ -529,7 +572,7 @@ export class TerrainSystem {
     return h;
   }
 
-  _generateHeightGrid() {
+  async _generateHeightGrid() {
     // Sample every waypoint so the trail can be flattened to its own grade.
     this.trailHeights = this.trailPoints.map((path) =>
       path.map(([x, z]) => this._shapedHeight(x, z)),
@@ -542,9 +585,11 @@ export class TerrainSystem {
     // The nearest-path search is the expensive part of generation, and it was
     // being redone in the height, surface and colour passes — three times the
     // work for the same answer. Solve it once into a grid and read the grid.
-    this._buildTrailField();
+    await this._buildTrailField();
 
+    let mark = performance.now();
     for (let j = 0; j < VERTS; j += 1) {
+      mark = await this._slice(mark);
       const z = -this.halfSize + j * ELEMENT;
       for (let i = 0; i < VERTS; i += 1) {
         const x = -this.halfSize + i * ELEMENT;
@@ -582,7 +627,7 @@ export class TerrainSystem {
       }
     }
 
-    this._classifyBiomes();
+    await this._classifyBiomes();
   }
 
   /**
@@ -590,13 +635,15 @@ export class TerrainSystem {
    * terrain grid. Generation passes read this instead of searching the paths
    * again, which is roughly a third of the boot cost on a 2 km map.
    */
-  _buildTrailField() {
+  async _buildTrailField() {
     const count = VERTS * VERTS;
     const distance = new Float32Array(count);
     const height = new Float32Array(count);
     const width = new Float32Array(count);
 
+    let mark = performance.now();
     for (let j = 0; j < VERTS; j += 1) {
+      mark = await this._slice(mark);
       const z = -this.halfSize + j * ELEMENT;
       for (let i = 0; i < VERTS; i += 1) {
         const x = -this.halfSize + i * ELEMENT;
@@ -624,10 +671,12 @@ export class TerrainSystem {
     return { distance: field.distance[index], height: field.height[index], width: field.width[index] };
   }
 
-  _classifyBiomes() {
+  async _classifyBiomes() {
     const bog = this.bogCentre();
 
+    let mark = performance.now();
     for (let j = 0; j < VERTS; j += 1) {
+      mark = await this._slice(mark);
       const z = -this.halfSize + j * ELEMENT;
       for (let i = 0; i < VERTS; i += 1) {
         const x = -this.halfSize + i * ELEMENT;
@@ -786,7 +835,7 @@ export class TerrainSystem {
     return texture;
   }
 
-  _buildMesh() {
+  async _buildMesh() {
     const count = VERTS * VERTS;
     const positions = new Float32Array(count * 3);
     const colors = new Float32Array(count * 3);
@@ -795,7 +844,9 @@ export class TerrainSystem {
     const color = new THREE.Color();
     const tint = new THREE.Color();
 
+    let mark = performance.now();
     for (let j = 0; j < VERTS; j += 1) {
+      mark = await this._slice(mark);
       for (let i = 0; i < VERTS; i += 1) {
         const index = i * VERTS + j;
         const x = -this.halfSize + i * ELEMENT;
@@ -910,7 +961,9 @@ export class TerrainSystem {
     const chunkVerts = vertsPerChunk * vertsPerChunk;
     this.chunks = [];
 
+    let chunkMark = performance.now();
     for (let cj = 0; cj < CHUNKS; cj += 1) {
+      chunkMark = await this._slice(chunkMark);
       for (let ci = 0; ci < CHUNKS; ci += 1) {
         const chunkPos = new Float32Array(chunkVerts * 3);
         const chunkCol = new Float32Array(chunkVerts * 3);
@@ -976,9 +1029,11 @@ export class TerrainSystem {
 
   /* ---------------- physics ---------------- */
 
-  _buildPhysics() {
+  async _buildPhysics() {
     const matrix = [];
+    let mark = performance.now();
     for (let i = 0; i < VERTS; i += 1) {
+      mark = await this._slice(mark);
       const column = new Array(VERTS);
       for (let j = 0; j < VERTS; j += 1) {
         // Cannon maps local (i*E, j*E) to world (x = -half + i*E, z = +half - j*E).
@@ -1046,7 +1101,7 @@ export class TerrainSystem {
     return Math.abs(x - center.x) < halfWidth + 6 && Math.abs(z - center.z) < halfDepth + 6;
   }
 
-  _scatter() {
+  async _scatter() {
     const random = mulberry32(this.seed ^ 0x2545f491);
 
     const trunkGeometry = new THREE.CylinderGeometry(0.22, 0.32, 3.2, 6);
@@ -1083,7 +1138,9 @@ export class TerrainSystem {
 
     let trees = 0;
     let attempts = 0;
+    let mark = performance.now();
     while (trees < TREES && attempts < TREES * 40) {
+      if ((attempts & 255) === 0) mark = await this._slice(mark);
       attempts += 1;
       const x = (random() * 2 - 1) * (this.halfSize - 12);
       const z = (random() * 2 - 1) * (this.halfSize - 12);
@@ -1143,6 +1200,7 @@ export class TerrainSystem {
     let boulders = 0;
     attempts = 0;
     while (boulders < BOULDERS && attempts < BOULDERS * 40) {
+      if ((attempts & 255) === 0) mark = await this._slice(mark);
       attempts += 1;
       const x = (random() * 2 - 1) * (this.halfSize - 10);
       const z = (random() * 2 - 1) * (this.halfSize - 10);
@@ -1372,7 +1430,7 @@ export class TerrainSystem {
     return material;
   }
 
-  _buildFoliage() {
+  async _buildFoliage() {
     this.windUniforms = {
       uTime: { value: 0 },
       uTruckPos: {
@@ -1408,7 +1466,7 @@ export class TerrainSystem {
     const position = new THREE.Vector3();
     const color = new THREE.Color();
 
-    const makePatch = (name, geometry, material, slots, accept) => {
+    const makePatch = async (name, geometry, material, slots, accept) => {
       const mesh = new THREE.InstancedMesh(geometry, material, slots);
       mesh.userData.maxInstances = slots;
       this._foliageMeshes.push(mesh);
@@ -1420,8 +1478,10 @@ export class TerrainSystem {
 
       let placed = 0;
       let attempts = 0;
+      let mark = performance.now();
       const limit = slots * 26;
       while (placed < slots && attempts < limit) {
+        if ((attempts & 511) === 0) mark = await this._slice(mark);
         attempts += 1;
         const x = (random() * 2 - 1) * (this.halfSize - 8);
         const z = (random() * 2 - 1) * (this.halfSize - 8);
@@ -1487,7 +1547,7 @@ export class TerrainSystem {
     // meadow reads as bare ground with a few spikes on it. Grass is one
     // instanced draw of six triangles per blade and casts no shadow, so the
     // count can go up an order of magnitude for almost nothing.
-    const grass = makePatch('grass', grassGeo, grassMat, 46000, ({ h, key, slope, density, random }) => {
+    const grass = await makePatch('grass', grassGeo, grassMat, 46000, ({ h, key, slope, density, random }) => {
       if (h < 3.4 || h > 34) return false;
       if (slope > 0.45) return false;
       if (key === 'water' || key === 'rock' || key === 'mud' || key === 'snow') return false;
@@ -1518,7 +1578,7 @@ export class TerrainSystem {
       softenNormal: 0.45,
     });
 
-    const ferns = makePatch('fern', fernGeo, fernMat, 8000, ({ h, key, slope, density, random }) => {
+    const ferns = await makePatch('fern', fernGeo, fernMat, 8000, ({ h, key, slope, density, random }) => {
       if (h < 3.6 || h > 26) return false;
       if (slope > 0.5) return false;
       if (key !== 'hardpack' && key !== 'trail') return false;
@@ -1544,7 +1604,7 @@ export class TerrainSystem {
       softenNormal: 0.7,
     });
 
-    const reeds = makePatch('reed', reedGeo, reedMat, 2600, ({ h, key, random }) => {
+    const reeds = await makePatch('reed', reedGeo, reedMat, 2600, ({ h, key, random }) => {
       if (h < WATER_LEVEL + 0.05 || h > WATER_LEVEL + 2.1) return false;
       if (key === 'water') return false;
       return random() < 0.75;
@@ -1561,7 +1621,7 @@ export class TerrainSystem {
     bushMat.userData.baseColor = new THREE.Color(0xa9b9a6);
     this._patchFoliageMaterial(bushMat, { sway: 0.14, rootY: 0, topY: 0.8, bend: 0.32 });
 
-    const bushes = makePatch('bush', bushGeo, bushMat, 2100, ({ h, key, slope, random }) => {
+    const bushes = await makePatch('bush', bushGeo, bushMat, 2100, ({ h, key, slope, random }) => {
       if (h < 14 || slope > 0.55) return false;
       if (key !== 'snow' && key !== 'rock') return false;
       return random() < 0.65;
