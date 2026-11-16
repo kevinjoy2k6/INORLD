@@ -1150,15 +1150,40 @@ export class TerrainSystem {
    * foliage material shares the same uniform objects, so one write per frame
    * moves the whole wilderness.
    */
-  _patchFoliageMaterial(material, { sway = 0.3, rootY = 0.0, topY = 1.0, bend = 0.55 } = {}) {
+  _patchFoliageMaterial(material, {
+    sway = 0.3,
+    rootY = 0.0,
+    topY = 1.0,
+    bend = 0.55,
+    rootTint = null,
+    tipTint = null,
+    softenNormal = 0,
+  } = {}) {
     material.userData.windUniforms = this.windUniforms;
+    const tinted = Boolean(rootTint && tipTint);
     material.onBeforeCompile = (shader) => {
       shader.uniforms.uTime = this.windUniforms.uTime;
       shader.uniforms.uTruckPos = this.windUniforms.uTruckPos;
       shader.vertexShader = `
         uniform float uTime;
         uniform vec4 uTruckPos[4];
+        ${tinted ? 'varying float vBladeT;' : ''}
       ` + shader.vertexShader;
+
+      // Blade normals are softened toward straight up. A grass cone's own
+      // normals point sideways, so half of every blade faces away from the sun
+      // and the meadow reads as dark spikes rooted in the ground. Aiming the
+      // normals up makes the field shade as one continuous velvet surface,
+      // which is the look the style wants.
+      if (softenNormal > 0) {
+        shader.vertexShader = shader.vertexShader.replace(
+          '#include <beginnormal_vertex>',
+          /* glsl */ `
+          #include <beginnormal_vertex>
+          objectNormal = normalize(mix(objectNormal, vec3(0.0, 1.0, 0.0), ${softenNormal.toFixed(3)}));
+          `,
+        );
+      }
 
       shader.vertexShader = shader.vertexShader.replace(
         '#include <begin_vertex>',
@@ -1174,6 +1199,7 @@ export class TerrainSystem {
         // Height factor: 0 at the root, 1 at the tip.
         float hNorm = clamp((position.y - ${rootY.toFixed(3)}) / ${(topY - rootY).toFixed(3)}, 0.0, 1.0);
         float hBend = hNorm * hNorm;
+        ${tinted ? 'vBladeT = hNorm;' : ''}
 
         // Gentle travelling wind wave, phase-shifted per plant.
         float phase = uTime * 1.45 + instOrigin.x * 0.24 + instOrigin.z * 0.19;
@@ -1202,6 +1228,23 @@ export class TerrainSystem {
         }
         `,
       );
+      if (tinted) {
+        const root = new THREE.Color(rootTint);
+        const tip = new THREE.Color(tipTint);
+        shader.fragmentShader = `varying float vBladeT;\n` + shader.fragmentShader;
+        shader.fragmentShader = shader.fragmentShader.replace(
+          '#include <color_fragment>',
+          /* glsl */ `
+          #include <color_fragment>
+          // Root-to-tip ramp: the base of the blade sits in its own shadow and
+          // is pulled toward the soil colour, so no plant has a visible dark
+          // foot; the tip catches the low sun.
+          vec3 bladeRoot = vec3(${root.r.toFixed(3)}, ${root.g.toFixed(3)}, ${root.b.toFixed(3)});
+          vec3 bladeTip = vec3(${tip.r.toFixed(3)}, ${tip.g.toFixed(3)}, ${tip.b.toFixed(3)});
+          diffuseColor.rgb *= mix(bladeRoot, bladeTip, smoothstep(0.0, 0.85, vBladeT));
+          `,
+        );
+      }
     };
     material.customProgramCacheKey = () => 'inorld-foliage';
     material.needsUpdate = true;
@@ -1304,16 +1347,34 @@ export class TerrainSystem {
       roughness: 0.92,
       metalness: 0,
       side: THREE.DoubleSide,
-      flatShading: true,
+      // Not flat-shaded: flat shading derives normals from screen-space
+      // derivatives, which ignores the up-facing normal override below and
+      // leaves the meadow a field of hard dark facets.
+      flatShading: false,
     });
     grassMat.userData.baseColor = new THREE.Color(0x8a9a4a);
-    this._patchFoliageMaterial(grassMat, { sway: 0.4, rootY: 0, topY: 1.35, bend: 0.72 });
+    this._patchFoliageMaterial(grassMat, {
+      sway: 0.4,
+      rootY: 0,
+      topY: 1.35,
+      bend: 0.72,
+      rootTint: '#8a8f3e',
+      tipTint: '#ffe08a',
+      softenNormal: 0.82,
+    });
 
-    const grass = makePatch('grass', grassGeo, grassMat, 2400, ({ h, key, slope, random }) => {
+    // 2,400 blades over a 640 m map is one tuft every thirteen metres — the
+    // meadow reads as bare ground with a few spikes on it. Grass is one
+    // instanced draw of six triangles per blade and casts no shadow, so the
+    // count can go up an order of magnitude for almost nothing.
+    const grass = makePatch('grass', grassGeo, grassMat, 9000, ({ h, key, slope, density, random }) => {
       if (h < 3.4 || h > 34) return false;
       if (slope > 0.45) return false;
       if (key === 'water' || key === 'rock' || key === 'mud' || key === 'snow') return false;
-      return random() < (key === 'trail' ? 0.55 : 0.95);
+      // Clump into drifts rather than spraying evenly: bare earth shows
+      // between stands, which is what breaks up the flat ochre.
+      const drift = density > -0.02 ? 0.96 : 0.35;
+      return random() < (key === 'trail' ? 0.45 : drift);
     });
 
     /* --- ferns in the damp, shaded spots --- */
@@ -1327,9 +1388,17 @@ export class TerrainSystem {
       flatShading: true,
     });
     fernMat.userData.baseColor = new THREE.Color(0x4f7a3a);
-    this._patchFoliageMaterial(fernMat, { sway: 0.16, rootY: 0, topY: 0.45, bend: 0.42 });
+    this._patchFoliageMaterial(fernMat, {
+      sway: 0.16,
+      rootY: 0,
+      topY: 0.45,
+      bend: 0.42,
+      rootTint: '#6f8a55',
+      tipTint: '#bfd68c',
+      softenNormal: 0.45,
+    });
 
-    const ferns = makePatch('fern', fernGeo, fernMat, 620, ({ h, key, slope, density, random }) => {
+    const ferns = makePatch('fern', fernGeo, fernMat, 1500, ({ h, key, slope, density, random }) => {
       if (h < 3.6 || h > 26) return false;
       if (slope > 0.5) return false;
       if (key !== 'hardpack' && key !== 'trail') return false;
@@ -1345,7 +1414,15 @@ export class TerrainSystem {
       side: THREE.DoubleSide,
     });
     reedMat.userData.baseColor = new THREE.Color(0x6f7d3c);
-    this._patchFoliageMaterial(reedMat, { sway: 0.42, rootY: 0, topY: 1.75, bend: 0.85 });
+    this._patchFoliageMaterial(reedMat, {
+      sway: 0.42,
+      rootY: 0,
+      topY: 1.75,
+      bend: 0.85,
+      rootTint: '#6d7a3c',
+      tipTint: '#d8c078',
+      softenNormal: 0.7,
+    });
 
     const reeds = makePatch('reed', reedGeo, reedMat, 480, ({ h, key, random }) => {
       if (h < WATER_LEVEL + 0.05 || h > WATER_LEVEL + 2.1) return false;

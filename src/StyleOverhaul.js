@@ -124,6 +124,13 @@ export class StyleOverhaul {
     root.traverse((object) => {
       if (!object.isMesh || !object.material) return;
       if (skip.includes(object.name)) return;
+      // Foliage must keep its own material. Their shading comes from a patched
+      // onBeforeCompile shader (wind, truck shove, root-to-tip ramp, up-facing
+      // normals); swapping in a fresh Lambert here silently deletes it and the
+      // meadow goes back to hard dark spikes.
+      if (object.name?.startsWith('Foliage_')) return;
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      if (materials.some((m) => m?.userData?.windUniforms || m?.userData?.keepMaterial)) return;
 
       const apply = (material) => {
         if (!material || material.isShaderMaterial) return material;
