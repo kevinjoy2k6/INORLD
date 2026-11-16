@@ -75,8 +75,8 @@ export class CameraController {
     this.teammates = [];
 
     /* ---- cinematic state ---- */
-    this.cineDistance = 13.6;
-    this.cineDistanceTarget = 13.6;
+    this.cineDistance = 10.4;
+    this.cineDistanceTarget = 10.4;
     this.heading = 0;
     this.lead = new THREE.Vector3();
     this.pitchAdapt = 0;
@@ -92,11 +92,11 @@ export class CameraController {
     /* ---- rendered pose, damped every frame ---- */
     this.position = new THREE.Vector3();
     this.target = new THREE.Vector3();
-    this.fov = 55;
+    this.fov = 58;
     this.transition = 0;
     this.initialised = false;
     // Distance actually used for the pose, after framing and rig adjustments.
-    this._effectiveDistance = 13.6;
+    this._effectiveDistance = 10.4;
 
     this._forward = new THREE.Vector3();
     this._desiredPos = new THREE.Vector3();
@@ -185,7 +185,7 @@ export class CameraController {
       this.orbitPitchTarget = clamp(this.orbitPitchTarget + dy * 0.0045, -0.15, 1.2);
     } else {
       // In cinematic mode a drag only nudges the yaw a little, then it recovers.
-      this.cineDistanceTarget = clamp(this.cineDistanceTarget + dy * 0.02, 7, 20);
+      this.cineDistanceTarget = clamp(this.cineDistanceTarget + dy * 0.02, 6, 20);
     }
   }
 
@@ -287,9 +287,13 @@ export class CameraController {
 
     this.cineDistance = damp(this.cineDistance, this.cineDistanceTarget, 3.5, dt);
 
+    // Closer and lower than a surveillance drone: at 13.6 m and 24 degrees the
+    // truck is a small yellow speck and you are looking down on the meadow
+    // rather than across it. 10.4 m at 17 degrees puts the horizon back in the
+    // frame and lets the truck carry the shot.
     let distance = this.cineDistance + Math.max(0, this.pitchAdapt) * 1.8;
-    let pitch = 0.42 - this.pitchAdapt * 0.1;
-    let fov = 55;
+    let pitch = 0.3 - this.pitchAdapt * 0.1;
+    let fov = 58;
     let frameShift = 0;
 
     /* ---- co-op framing: widen and re-centre for a nearby partner ---- */
