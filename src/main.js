@@ -21,6 +21,7 @@ import { Landmarks } from './Landmarks.js';
 import { StyleDNA } from './StyleDNA.js';
 import { WaterSystem } from './WaterSystem.js';
 import { StyleOverhaul, applyStylePalette } from './StyleOverhaul.js';
+import { OverlandStyle } from './OverlandStyle.js';
 import { regionAt } from './WorldAtlas.js';
 import {
   createProvingProps,
@@ -437,6 +438,14 @@ const toonMaterials = styleDNA.celShadeVehicle()
 // Mirror water with a depth-shaded shore, modelled on Tidelight Harbor.
 const waterSystem = new WaterSystem({ scene, terrain, atmosphere, quality });
 waterSystem.setQuality(quality.tier || 'HIGH');
+const overlandStyle = new OverlandStyle({
+  scene,
+  renderer,
+  atmosphere,
+  camera,
+  onToast: (message) => toast(message),
+});
+
 const styleOverhaul = new StyleOverhaul({
   scene,
   atmosphere,
@@ -587,6 +596,9 @@ window.addEventListener('keydown', (event) => {
       toast(camp.ok ? `CAMPED — ${camp.phase}` : 'NO CAMPSITE NEARBY');
       break;
     }
+    case 'KeyY':
+      overlandStyle.next();
+      break;
     case 'KeyN':
       toast(vehicle.toggleAWD() ? '4WD ENGAGED' : '2WD — REAR DRIVE');
       break;
@@ -1201,7 +1213,7 @@ function frame(now) {
   landmarks.update(dt, vehicle, atmosphere.night);
   styleDNA.update(dt);
   waterSystem.update(dt, camera, atmosphere.sunDirection);
-  styleOverhaul.tick(Math.min(1, dt * 6));
+  overlandStyle.tick(dt);
   // Adaptive resolution: hold frame rate by bleeding pixels, then restore them.
   // Cheaper than cutting world detail, and invisible while driving fast.
   fpsGovernor(dt);
@@ -1334,7 +1346,7 @@ window.__game = {
   atmosphere, tactile, audio,
   optimizer, settingsUI, expeditionHUD,
   test: provingBench, testHud: provingHud, provingGround: TEST_MODE ? PROVING_GROUND : null,
-  landmarks, styleDNA, regionAt, waterSystem, styleOverhaul,
+  landmarks, styleDNA, regionAt, waterSystem, styleOverhaul, overlandStyle,
 };
 
 // Phase 7 adds a lot of new shader programs (wind-blown foliage, beams, post
