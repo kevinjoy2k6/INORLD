@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
-import { REGIONS, ROADS, regionAt, WORLD } from './WorldAtlas.js';
+import { REGIONS, ROADS, regionAt, WORLD, WORLD_SCALE } from './WorldAtlas.js';
 import {
   shapeProvingGround,
   resolveDatum,
@@ -304,7 +304,7 @@ function createGrassTuftGeometry(height = 1.35, halfWidth = 0.09) {
 const SIZE = WORLD.size;
 // 176 cells over 640 m = 3.6 m facets. The flat-shaded style wants planes you
 // can read as planes; 2 m cells were small enough to look smooth.
-const SEGMENTS = 176;
+const SEGMENTS = 416;
 const ELEMENT = SIZE / SEGMENTS;
 const VERTS = SEGMENTS + 1;
 const WATER_LEVEL = 1.1;
@@ -408,11 +408,13 @@ export class TerrainSystem {
   }
 
   riverZ(x) {
-    return -26 + 16 * Math.sin(x * 0.0095) + 5 * Math.sin(x * 0.028 + 1.6);
+    // Same meander, scaled: the river has to cross a 2 km map, not 640 m.
+    const dx = x / WORLD_SCALE;
+    return WORLD_SCALE * (-26 + 16 * Math.sin(dx * 0.0095) + 5 * Math.sin(dx * 0.028 + 1.6));
   }
 
   bogCentre() {
-    return { x: -78, z: -62 };
+    return { x: -78 * WORLD_SCALE, z: -62 * WORLD_SCALE };
   }
 
   /* ---------------- height ---------------- */
@@ -421,6 +423,13 @@ export class TerrainSystem {
     const a = this.noiseA;
     const b = this.noiseB;
     const c = this.noiseC;
+
+    // The shape below was authored for a 640 m valley. Sampling it in design
+    // space stretches the same ridges, peaks and ledges across the 2 km map,
+    // so the terrain keeps its character but every slope is 3.2x longer —
+    // which is what makes it smooth to drive instead of a field of bumps.
+    x /= WORLD_SCALE;
+    z /= WORLD_SCALE;
 
     // Rolling valley floor.
     let h = 6.4 + fbm(a, x * 0.0065, z * 0.0065, 4) * 3.6;
@@ -489,7 +498,7 @@ export class TerrainSystem {
   /** Base terrain + the region's own character (meadow rolls, canyon steps). */
   _shapedHeight(x, z) {
     let h = this._baseHeight(x, z);
-    const coast = z < -170;
+    const coast = z < -170 * WORLD_SCALE;
     if (!coast && h < 2.15) h = 2.15;
     const region = regionAt(x, z);
     if (region.shape) h = region.shape(h, x, z, (a, b) => this.noiseB(a, b));
@@ -983,9 +992,10 @@ export class TerrainSystem {
     const boulderMaterial = new THREE.MeshStandardMaterial({ color: 0x6a6259, roughness: 0.94, flatShading: true });
     const poleMaterial = new THREE.MeshStandardMaterial({ color: 0x6d5433, roughness: 0.9 });
 
-    const TREES = 340;
-    const BOULDERS = 150;
-    const POLES = 46;
+    // Counts scale with the map area, or 2 km reads as an empty plain.
+    const TREES = 1150;
+    const BOULDERS = 520;
+    const POLES = 150;
 
     const trunkMesh = new THREE.InstancedMesh(trunkGeometry, trunkMaterial, TREES);
     const pineMesh = new THREE.InstancedMesh(pineGeometry, pineMaterial, TREES);
@@ -1410,7 +1420,7 @@ export class TerrainSystem {
     // meadow reads as bare ground with a few spikes on it. Grass is one
     // instanced draw of six triangles per blade and casts no shadow, so the
     // count can go up an order of magnitude for almost nothing.
-    const grass = makePatch('grass', grassGeo, grassMat, 9000, ({ h, key, slope, density, random }) => {
+    const grass = makePatch('grass', grassGeo, grassMat, 24000, ({ h, key, slope, density, random }) => {
       if (h < 3.4 || h > 34) return false;
       if (slope > 0.45) return false;
       if (key === 'water' || key === 'rock' || key === 'mud' || key === 'snow') return false;
@@ -1441,7 +1451,7 @@ export class TerrainSystem {
       softenNormal: 0.45,
     });
 
-    const ferns = makePatch('fern', fernGeo, fernMat, 1500, ({ h, key, slope, density, random }) => {
+    const ferns = makePatch('fern', fernGeo, fernMat, 4000, ({ h, key, slope, density, random }) => {
       if (h < 3.6 || h > 26) return false;
       if (slope > 0.5) return false;
       if (key !== 'hardpack' && key !== 'trail') return false;
@@ -1467,7 +1477,7 @@ export class TerrainSystem {
       softenNormal: 0.7,
     });
 
-    const reeds = makePatch('reed', reedGeo, reedMat, 480, ({ h, key, random }) => {
+    const reeds = makePatch('reed', reedGeo, reedMat, 1400, ({ h, key, random }) => {
       if (h < WATER_LEVEL + 0.05 || h > WATER_LEVEL + 2.1) return false;
       if (key === 'water') return false;
       return random() < 0.75;
@@ -1484,7 +1494,7 @@ export class TerrainSystem {
     bushMat.userData.baseColor = new THREE.Color(0xa9b9a6);
     this._patchFoliageMaterial(bushMat, { sway: 0.14, rootY: 0, topY: 0.8, bend: 0.32 });
 
-    const bushes = makePatch('bush', bushGeo, bushMat, 380, ({ h, key, slope, random }) => {
+    const bushes = makePatch('bush', bushGeo, bushMat, 1050, ({ h, key, slope, random }) => {
       if (h < 14 || slope > 0.55) return false;
       if (key !== 'snow' && key !== 'rock') return false;
       return random() < 0.65;

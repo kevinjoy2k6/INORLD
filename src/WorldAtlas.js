@@ -196,6 +196,47 @@ export const ROADS = [
       [154, 66], [172, 40], [206, 8], [250, -18], [292, -44], [306, -86],
     ],
   },
+
+  /* ---- the unmarked three ------------------------------------------
+   * No signs, no fuel, no waypoints: these are the tracks a local knows.
+   * They are narrow, they switchback hard, and they run the long way
+   * round. Losing one costs you a climb, not a respawn.
+   * ---------------------------------------------------------------- */
+  {
+    id: 'quarry-switchbacks',
+    name: 'Quarry Switchbacks',
+    kind: 'trail',
+    width: 2.9,
+    points: [
+      [-268, -150], [-232, -128], [-268, -96], [-228, -64], [-266, -30],
+      [-226, 2], [-262, 34], [-224, 66], [-258, 100], [-214, 120],
+      [-176, 100], [-152, 64], [-160, 24], [-140, -16], [-116, -52],
+      [-132, -96], [-108, -134], [-64, -150], [-24, -128],
+    ],
+  },
+  {
+    id: 'ridge-traverse',
+    name: 'High Traverse',
+    kind: 'trail',
+    width: 3.1,
+    points: [
+      [-300, 148], [-244, 168], [-196, 148], [-156, 178], [-108, 158],
+      [-60, 186], [-8, 164], [40, 196], [92, 172], [140, 204],
+      [192, 178], [244, 206], [296, 176],
+    ],
+  },
+  {
+    id: 'river-run',
+    name: 'River Run',
+    kind: 'trail',
+    width: 3.4,
+    points: [
+      [296, -244], [252, -232], [214, -252], [178, -236], [140, -258],
+      [104, -238], [66, -262], [28, -240], [-12, -262], [-52, -238],
+      [-92, -260], [-132, -236], [-172, -258], [-212, -232], [-252, -254],
+      [-292, -230],
+    ],
+  },
 ];
 
 /** Longest stretch used for grading quality checks. */
@@ -238,3 +279,44 @@ export const SIGNS = [
   { text: 'RIDGE PASS', x: 28, z: 112 },
   { text: 'MEADOW TRACK', x: -152, z: -72 },
 ];
+
+
+/* ================================================================== *
+ *  Scale the atlas up to the built world
+ *
+ *  Everything above is authored in a 640 m design space — numbers a
+ *  person can reason about. The world is 3.2x that, a 2 km square, and
+ *  the stretch is applied here in one place rather than by rewriting
+ *  every literal: the regions, their shape functions, every road and
+ *  trail, and every landmark move together. Hills keep their authored
+ *  amplitude but spread over 3.2x the ground, which is what turns the
+ *  old 640 m valley into long, gentle 2 km slopes.
+ * ================================================================== */
+export const WORLD_SCALE = 3.2;
+
+WORLD.size = 640 * WORLD_SCALE;
+WORLD.half = 320 * WORLD_SCALE;
+
+for (const region of REGIONS) {
+  region.bounds = {
+    x: [region.bounds.x[0] * WORLD_SCALE, region.bounds.x[1] * WORLD_SCALE],
+    z: [region.bounds.z[0] * WORLD_SCALE, region.bounds.z[1] * WORLD_SCALE],
+  };
+  // Shape functions think in design metres, so hand them design metres.
+  const shape = region.shape;
+  region.shape = (h, x, z, noise) => shape(h, x / WORLD_SCALE, z / WORLD_SCALE, noise);
+}
+
+for (const road of ROADS) {
+  road.points = road.points.map(([x, z]) => [x * WORLD_SCALE, z * WORLD_SCALE]);
+  // Graded roads widen with the world; trails stay narrow, because the
+  // challenge is the line you pick through them.
+  road.width = road.kind === 'road' ? road.width * 1.45 : road.width * 1.05;
+}
+
+for (const list of [WATCHTOWERS, GAS_STATIONS, SIGNS]) {
+  for (const item of list) {
+    item.x *= WORLD_SCALE;
+    item.z *= WORLD_SCALE;
+  }
+}

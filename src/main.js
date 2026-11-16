@@ -98,7 +98,8 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xa8bccd);
 scene.fog = new THREE.Fog(0xa8bccd, 40, 260);
 
-const camera = new THREE.PerspectiveCamera(58, window.innerWidth / window.innerHeight, 0.1, 1200);
+// Far plane has to reach across a 2 km map, or the far ridge clips away.
+const camera = new THREE.PerspectiveCamera(58, window.innerWidth / window.innerHeight, 0.1, 3200);
 camera.position.set(0, 6, -16);
 
 const quality = new QualityManager(renderer, scene, initialTier);

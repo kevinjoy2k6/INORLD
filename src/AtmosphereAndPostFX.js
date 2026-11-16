@@ -158,7 +158,9 @@ export class AtmosphereAndPostFX {
     this._tmpColor = new THREE.Color();
     this._snowFog = new THREE.Color(0xd6e2ec);
     this.weatherMode = 'clear';
-    this.viewDistance = 240;
+    // 240 m was the whole draw of a 640 m valley. On 2 km of ground the
+    // treeline has to be two or three ridges out before the haze takes it.
+    this.viewDistance = 380;
     this._sunDir = new THREE.Vector3();
 
     /* ---- sky ---- */
