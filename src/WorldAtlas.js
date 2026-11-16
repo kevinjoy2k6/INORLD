@@ -11,10 +11,18 @@
  *  poles and signage. Watchtowers and gas stations sit on the network so the
  *  map is navigable without a minimap.
  * ========================================================================== */
+/**
+ * The atlas is authored in a 640 m "design space" — numbers a person can
+ * reason about. The built world is 3.2x that, a 2 km square. The scale is
+ * applied below in one place so the layout, its regions and its noise
+ * character all stretch together: the same valley, with hills 3.2x longer
+ * and settlements 3.2x further apart.
+ */
+export const WORLD_SCALE = 3.2;
 
 export const WORLD = {
-  size: 640,
-  half: 320,
+  size: 640 * WORLD_SCALE,
+  half: 320 * WORLD_SCALE,
   waterLevel: 1.1,
 };
 
@@ -292,11 +300,6 @@ export const SIGNS = [
  *  amplitude but spread over 3.2x the ground, which is what turns the
  *  old 640 m valley into long, gentle 2 km slopes.
  * ================================================================== */
-export const WORLD_SCALE = 3.2;
-
-WORLD.size = 640 * WORLD_SCALE;
-WORLD.half = 320 * WORLD_SCALE;
-
 for (const region of REGIONS) {
   region.bounds = {
     x: [region.bounds.x[0] * WORLD_SCALE, region.bounds.x[1] * WORLD_SCALE],

@@ -31,7 +31,6 @@ export const STYLE_PRESETS = {
     fogDensity: 0.0042,
     fogColour: '#fad6c8',
     exposure: 1.08,
-    wetness: 0,
   },
   ALPINE_NOON: {
     label: 'ALPINE NOON',
@@ -43,7 +42,6 @@ export const STYLE_PRESETS = {
     fogDensity: 0.002,
     fogColour: '#dcebf7',
     exposure: 1.02,
-    wetness: 0,
   },
   ALPENGLOW_SUNSET: {
     label: 'ALPENGLOW',
@@ -55,7 +53,6 @@ export const STYLE_PRESETS = {
     fogDensity: 0.0055,
     fogColour: '#f6c2c8',
     exposure: 1.12,
-    wetness: 0,
   },
   STORM_CONVOY: {
     label: 'STORM CONVOY',
@@ -67,33 +64,16 @@ export const STYLE_PRESETS = {
     fogDensity: 0.0115,
     fogColour: '#2b426b',
     exposure: 0.98,
-    wetness: 0.85,
   },
 };
 
 export const PRESET_ORDER = ['GOLDEN_MEADOW', 'ALPINE_NOON', 'ALPENGLOW_SUNSET', 'STORM_CONVOY'];
 
-/**
- * Dual-layer aerial + height fog.
- *
- * NOTE: this is deliberately NOT a THREE.ShaderChunk override. Rewriting the
- * shared fog chunks needs vFogWorldPosition declared in every material that
- * can be fogged, and the ones that already define their own varying (the water
- * shader, several post passes) end up with a redeclaration. The whole scene
- * then fails to link and nothing renders. The look is produced from the
- * standard fog instead: FogExp2 colour and density come from the preset, and
- * the gradient separation comes from the gradient sky plus the palette.
- */
-export function installDualLayerFog() {
-  return false;
-}
-
 export class OverlandStyle {
-  constructor({ scene, renderer, atmosphere, camera, onToast }) {
+  constructor({ scene, renderer, atmosphere, onToast }) {
     this.scene = scene;
     this.renderer = renderer;
     this.atmosphere = atmosphere;
-    this.camera = camera;
     this.onToast = onToast;
 
     if (this.renderer) {
@@ -107,16 +87,7 @@ export class OverlandStyle {
       this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     }
 
-    // Shared values other systems may read (grass, rock, wetness-aware tyre).
-    this.globalUniforms = {
-      uGlobalWetness: { value: 0 },
-      uGlobalSnowLine: { value: 180 },
-      uGlobalShadowTint: { value: new THREE.Color('#5e5068') },
-      uTime: { value: 0 },
-    };
-
     this.preset = 'GOLDEN_MEADOW';
-    this._fogColour = new THREE.Color(STYLE_PRESETS.GOLDEN_MEADOW.fogColour);
     this.applyPreset('GOLDEN_MEADOW');
   }
 
@@ -141,7 +112,7 @@ export class OverlandStyle {
       this.scene.fog.color.set(preset.fogColour);
       this.scene.fog.density = preset.fogDensity;
     }
-    this.scene.background = this._fogColour.set(preset.fogColour).clone();
+    this.scene.background = new THREE.Color(preset.fogColour);
 
     // Hand the look to the atmosphere instead of writing the lights here. The
     // phase system runs every frame; a second writer makes the sun, ambient
@@ -159,7 +130,6 @@ export class OverlandStyle {
       });
     }
 
-    this.globalUniforms.uGlobalWetness.value = preset.wetness;
     return preset;
   }
 
@@ -170,13 +140,5 @@ export class OverlandStyle {
     const preset = this.applyPreset(nextName);
     this.onToast?.(`LIGHT — ${preset.label}`);
     return nextName;
-  }
-
-  /**
-   * Advance shared time. Lighting is not written here: the atmosphere owns it
-   * and applies the preset as its single per-frame write.
-   */
-  tick(dt) {
-    this.globalUniforms.uTime.value += dt;
   }
 }

@@ -267,6 +267,11 @@ export const BIOMES = {
  * sides), and because they are flat planes the root-to-tip ramp shades them as
  * a soft sheet instead of shading a cone's facets.
  */
+const clampIndex = (v) => {
+  const i = Math.round(v);
+  return i < 0 ? 0 : i > VERTS - 1 ? VERTS - 1 : i;
+};
+
 function createGrassTuftGeometry(height = 1.35, halfWidth = 0.09) {
   const positions = [];
   const normals = [];
@@ -372,8 +377,10 @@ export class TerrainSystem {
     }
 
     this.trailPoints = this._buildTrailLayout();
-    this.built = false;
-    this.progress = 0;
+    // Time of the last hand-back to the browser, and the shared record the
+    // trail-field lookup fills in. Both are build/terrain-wide, not per-call.
+    this._yieldAt = 0;
+    this._trailSample = { distance: 0, height: 0, width: 0 };
   }
 
   /* ---------------- sliced build ---------------- */
@@ -388,10 +395,7 @@ export class TerrainSystem {
    * boot screen stays live and the tab never reports as unresponsive.
    */
   async build(onProgress = null) {
-    const report = (fraction, label) => {
-      this.progress = fraction;
-      if (onProgress) onProgress(fraction, label);
-    };
+    const report = (fraction, label) => onProgress?.(fraction, label);
 
     report(0.03, 'GRADING TRAILS');
     await this._generateHeightGrid();
@@ -410,20 +414,18 @@ export class TerrainSystem {
     await this._buildFoliage();
 
     this.spawn = this._resolveSpawn();
-    this.built = true;
     report(1, 'READY');
   }
 
   /**
-   * Yield to the browser if this slice has used its budget. Returns the
-   * timestamp to measure the next slice from.
+   * Hand the main thread back if this slice has had its budget. 6 ms keeps
+   * every task well under a frame at 60 Hz, which is what stops the page
+   * feeling locked while generation runs.
    */
-  async _slice(mark) {
-    // 6 ms keeps every task well under a frame at 60 Hz, which is what stops
-    // the page feeling locked while generation runs.
-    if (performance.now() - mark < 6) return mark;
+  async _yield() {
+    if (performance.now() - this._yieldAt < 6) return;
     await new Promise((resolve) => setTimeout(resolve, 0));
-    return performance.now();
+    this._yieldAt = performance.now();
   }
 
   /* ---------------- layout ---------------- */
@@ -482,7 +484,8 @@ export class TerrainSystem {
 
   /* ---------------- height ---------------- */
 
-  _baseHeight(x, z) {
+  /** Height at a world position: metres in, design-space noise inside. */
+  _baseHeight(xMetres, zMetres) {
     const a = this.noiseA;
     const b = this.noiseB;
     const c = this.noiseC;
@@ -491,8 +494,8 @@ export class TerrainSystem {
     // space stretches the same ridges, peaks and ledges across the 2 km map,
     // so the terrain keeps its character but every slope is 3.2x longer —
     // which is what makes it smooth to drive instead of a field of bumps.
-    x /= WORLD_SCALE;
-    z /= WORLD_SCALE;
+    const x = xMetres / WORLD_SCALE;
+    const z = zMetres / WORLD_SCALE;
 
     // Rolling valley floor.
     let h = 6.4 + fbm(a, x * 0.0065, z * 0.0065, 4) * 3.6;
@@ -587,9 +590,8 @@ export class TerrainSystem {
     // work for the same answer. Solve it once into a grid and read the grid.
     await this._buildTrailField();
 
-    let mark = performance.now();
     for (let j = 0; j < VERTS; j += 1) {
-      mark = await this._slice(mark);
+      await this._yield();
       const z = -this.halfSize + j * ELEMENT;
       for (let i = 0; i < VERTS; i += 1) {
         const x = -this.halfSize + i * ELEMENT;
@@ -641,9 +643,8 @@ export class TerrainSystem {
     const height = new Float32Array(count);
     const width = new Float32Array(count);
 
-    let mark = performance.now();
     for (let j = 0; j < VERTS; j += 1) {
-      mark = await this._slice(mark);
+      await this._yield();
       const z = -this.halfSize + j * ELEMENT;
       for (let i = 0; i < VERTS; i += 1) {
         const x = -this.halfSize + i * ELEMENT;
@@ -659,24 +660,30 @@ export class TerrainSystem {
     this.trailField = { distance, height, width };
   }
 
-  /** Field lookup with the same shape as _trailDistanceAndHeight. */
+  /**
+   * Field lookup, same shape as _trailDistanceAndHeight. Returns a shared
+   * record: this runs a quarter of a million times per build, so allocating a
+   * fresh object each call is pure garbage. Read it where you get it.
+   */
   _trailFieldAt(x, z) {
+    // build() lays the field down before anything reads it, so no guard here.
     const field = this.trailField;
-    if (!field) return this._trailDistanceAndHeight(x, z);
-    let i = Math.round((x + this.halfSize) / ELEMENT);
-    let j = Math.round((z + this.halfSize) / ELEMENT);
-    i = i < 0 ? 0 : i > VERTS - 1 ? VERTS - 1 : i;
-    j = j < 0 ? 0 : j > VERTS - 1 ? VERTS - 1 : j;
+    const i = clampIndex((x + this.halfSize) / ELEMENT);
+    const j = clampIndex((z + this.halfSize) / ELEMENT);
     const index = i * VERTS + j;
-    return { distance: field.distance[index], height: field.height[index], width: field.width[index] };
+
+    const sample = this._trailSample;
+    sample.distance = field.distance[index];
+    sample.height = field.height[index];
+    sample.width = field.width[index];
+    return sample;
   }
 
   async _classifyBiomes() {
     const bog = this.bogCentre();
 
-    let mark = performance.now();
     for (let j = 0; j < VERTS; j += 1) {
-      mark = await this._slice(mark);
+      await this._yield();
       const z = -this.halfSize + j * ELEMENT;
       for (let i = 0; i < VERTS; i += 1) {
         const x = -this.halfSize + i * ELEMENT;
@@ -844,9 +851,8 @@ export class TerrainSystem {
     const color = new THREE.Color();
     const tint = new THREE.Color();
 
-    let mark = performance.now();
     for (let j = 0; j < VERTS; j += 1) {
-      mark = await this._slice(mark);
+      await this._yield();
       for (let i = 0; i < VERTS; i += 1) {
         const index = i * VERTS + j;
         const x = -this.halfSize + i * ELEMENT;
@@ -961,9 +967,8 @@ export class TerrainSystem {
     const chunkVerts = vertsPerChunk * vertsPerChunk;
     this.chunks = [];
 
-    let chunkMark = performance.now();
     for (let cj = 0; cj < CHUNKS; cj += 1) {
-      chunkMark = await this._slice(chunkMark);
+      await this._yield();
       for (let ci = 0; ci < CHUNKS; ci += 1) {
         const chunkPos = new Float32Array(chunkVerts * 3);
         const chunkCol = new Float32Array(chunkVerts * 3);
@@ -1031,9 +1036,8 @@ export class TerrainSystem {
 
   async _buildPhysics() {
     const matrix = [];
-    let mark = performance.now();
     for (let i = 0; i < VERTS; i += 1) {
-      mark = await this._slice(mark);
+      await this._yield();
       const column = new Array(VERTS);
       for (let j = 0; j < VERTS; j += 1) {
         // Cannon maps local (i*E, j*E) to world (x = -half + i*E, z = +half - j*E).
@@ -1138,9 +1142,8 @@ export class TerrainSystem {
 
     let trees = 0;
     let attempts = 0;
-    let mark = performance.now();
     while (trees < TREES && attempts < TREES * 40) {
-      if ((attempts & 255) === 0) mark = await this._slice(mark);
+      if ((attempts & 255) === 0) await this._yield();
       attempts += 1;
       const x = (random() * 2 - 1) * (this.halfSize - 12);
       const z = (random() * 2 - 1) * (this.halfSize - 12);
@@ -1200,7 +1203,7 @@ export class TerrainSystem {
     let boulders = 0;
     attempts = 0;
     while (boulders < BOULDERS && attempts < BOULDERS * 40) {
-      if ((attempts & 255) === 0) mark = await this._slice(mark);
+      if ((attempts & 255) === 0) await this._yield();
       attempts += 1;
       const x = (random() * 2 - 1) * (this.halfSize - 10);
       const z = (random() * 2 - 1) * (this.halfSize - 10);
@@ -1478,10 +1481,9 @@ export class TerrainSystem {
 
       let placed = 0;
       let attempts = 0;
-      let mark = performance.now();
-      const limit = slots * 26;
+        const limit = slots * 26;
       while (placed < slots && attempts < limit) {
-        if ((attempts & 511) === 0) mark = await this._slice(mark);
+        if ((attempts & 511) === 0) await this._yield();
         attempts += 1;
         const x = (random() * 2 - 1) * (this.halfSize - 8);
         const z = (random() * 2 - 1) * (this.halfSize - 8);

@@ -257,7 +257,6 @@ if (TEST_MODE) {
 
 // Poles, centre lines, junction signs and gas stations: the human layer.
 const landmarks = new Landmarks({ scene, terrain, groundMaterial });
-bootMark('landmarks');
 
 // Tyre ruts: a render-target stamp map on HIGH/MEDIUM, decal ribbons on LOW.
 const rutSystem = new RutSystem({
@@ -272,7 +271,6 @@ const rutSystem = new RutSystem({
  *  Vehicle
  * ================================================================== */
 
-bootMark('ruts');
 const vehicle = new OffroadVehicle({
   world,
   scene,
@@ -397,7 +395,6 @@ networkManager.missionManager = missionManager;
  *  Camera
  * ================================================================== */
 
-bootMark('hud');
 const cameraController = new CameraController(camera, {
   vehicle,
   trailer,
@@ -449,7 +446,6 @@ function toast(text) {
  *  Phase 7 — atmosphere/post-FX, tactile mechanical detail, audio
  * ================================================================== */
 
-bootMark('vehicle');
 const atmosphere = new AtmosphereAndPostFX({
   renderer,
   scene,
@@ -470,24 +466,20 @@ atmosphere.fogScale = 0.34;
 
 // Style DNA: toon hard surfaces, ink the hero truck, painted cumulus, region
 // grading. The truck is cel-shaded once its material set is final.
-bootMark('atmosphere');
 const styleDNA = new StyleDNA({ scene, camera, atmosphere, vehicle, quality });
 const toonMaterials = styleDNA.celShadeVehicle()
   + styleDNA.celShadeProps([landmarks.group, missionManager.group]);
 
 // Mirror water with a depth-shaded shore, modelled on Tidelight Harbor.
-bootMark('styledna');
 const waterSystem = new WaterSystem({ scene, terrain, atmosphere, quality });
 waterSystem.setQuality(quality.tier || 'HIGH');
 const overlandStyle = new OverlandStyle({
   scene,
   renderer,
   atmosphere,
-  camera,
   onToast: (message) => toast(message),
 });
 
-bootMark('water');
 const styleOverhaul = new StyleOverhaul({
   scene,
   atmosphere,
@@ -498,9 +490,7 @@ const styleOverhaul = new StyleOverhaul({
   styleDNA,
 });
 
-bootMark('overhaul');
 const tactile = new TactileVFX({ scene, vehicle, trailer, terrain, quality });
-bootMark('tactilevfx');
 
 // Test-range instrumentation: samples the real physics while you drive.
 const provingBench = TEST_MODE ? createProvingBench({ vehicle, terrain }) : null;
@@ -552,7 +542,6 @@ vehicle.shiftDown = () => {
  *  Phase 8 — performance governor, settings drawer, expedition HUD
  * ================================================================== */
 
-bootMark('optimizer-start');
 const optimizer = new PerformanceOptimizer({
   renderer,
   scene,
@@ -581,7 +570,6 @@ const settingsUI = new GraphicsSettingsUI({
   audio,
 });
 
-bootMark('tactile');
 const expeditionHUD = new ExpeditionHUD({
   optimizer,
   vehicle,
@@ -1263,7 +1251,6 @@ function frame(now) {
   landmarks.update(dt, vehicle, atmosphere.night);
   styleDNA.update(dt);
   waterSystem.update(dt, camera, atmosphere.sunDirection);
-  overlandStyle.tick(dt);
   // Adaptive resolution: hold frame rate by bleeding pixels, then restore them.
   // Cheaper than cutting world detail, and invisible while driving fast.
   fpsGovernor(dt);
@@ -1410,7 +1397,6 @@ renderer.compile(scene, camera);
  * world was already built. compileAsync hands compilation to the driver and
  * yields between programs, so the boot screen keeps animating.
  * ------------------------------------------------------------------------ */
-bootMark('pre-first-frame');
 try {
   if (typeof renderer.compileAsync === 'function') {
     await renderer.compileAsync(scene, camera);
