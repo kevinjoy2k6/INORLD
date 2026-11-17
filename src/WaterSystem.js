@@ -93,8 +93,14 @@ export class WaterSystem {
     // refresh it less often on weaker hardware. A slightly stale reflection is
     // invisible at driving speed; the halved fill cost is not.
     const tier = (quality && quality.tier) || 'HIGH';
-    const mirror = tier === 'ULTRA' ? 512 : tier === 'ULTRA_LOW' || tier === 'LOW' ? 128 : 256;
-    this.mirrorSkip = mirror >= 512 ? 1 : mirror >= 256 ? 2 : 3;
+    const mirror = tier === 'ULTRA' ? 384 : tier === 'ULTRA_LOW' || tier === 'LOW' ? 128 : 192;
+    this.mirrorSkip = mirror >= 384 ? 1 : mirror >= 192 ? 2 : 3;
+    // Cadence in milliseconds, not frames. A frame-count throttle turns a
+    // steady 60 FPS into alternating heavy and light frames, which reads as
+    // stutter even though the average is fine; a lake reflection does not
+    // change in 45 ms.
+    this.mirrorInterval = tier === 'ULTRA' ? 0 : tier === 'LOW' || tier === 'COZY' || tier === 'ULTRA_LOW' ? 90 : 45;
+    this._lastMirror = 0;
     this._frame = 0;
 
     this.water = new Water(geometry, {
@@ -109,12 +115,31 @@ export class WaterSystem {
       alpha: 0.92,
     });
 
+    // Ground cover is thousands of tiny instances that a 192 px reflection
+    // cannot resolve anyway, but it is the most numerous thing the mirrored
+    // camera would be asked to draw. Hide it for the mirror pass only.
+    this.reflectionHidden = Array.isArray(terrain?._lodGroups)
+      ? terrain._lodGroups.filter((group) => /grass|fern|reed|bush/i.test(group.name || ''))
+      : [];
+
     // Throttle the reflection pass without touching Water's internals.
     const mirrorPass = this.water.onBeforeRender;
     this.water.onBeforeRender = (renderer, scene, camera, geo, mat, group) => {
       this._frame += 1;
-      if (this.mirrorSkip > 1 && this._frame % this.mirrorSkip !== 0) return;
+      if (this.mirrorInterval > 0) {
+        const now = performance.now();
+        if (now - this._lastMirror < this.mirrorInterval) return;
+        this._lastMirror = now;
+      }
+      const muted = [];
+      for (const cover of this.reflectionHidden) {
+        if (cover.visible) {
+          cover.visible = false;
+          muted.push(cover);
+        }
+      }
       mirrorPass.call(this.water, renderer, scene, camera, geo, mat, group);
+      for (const cover of muted) cover.visible = true;
     };
 
     this.water.name = 'MirrorWater';
@@ -198,6 +223,7 @@ export class WaterSystem {
     const low = tier === 'LOW' || tier === 'COZY' || tier === 'ULTRA_LOW';
     this.water.material.uniforms.distortionScale.value = low ? 0.4 : 0.55;
     this.mirrorSkip = low ? 3 : 2;
+    this.mirrorInterval = low ? 90 : tier === 'ULTRA' ? 0 : 45;
     this.enabled = true;
   }
 

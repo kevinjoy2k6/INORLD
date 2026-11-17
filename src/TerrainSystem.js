@@ -1551,6 +1551,27 @@ export class TerrainSystem {
     this.lodStats.near = near;
     this.lodStats.far = far;
     this.lodStats.hidden = this._lodChunks.length - near - far;
+
+    // Ground chunks past the fog line are a flat wash of fog colour, but they
+    // still cover pixels, and on a fill-limited GPU that is the most expensive
+    // thing in the frame. Beyond 1.6x the fog distance the terrain is
+    // indistinguishable from the haze behind it, so stop drawing it.
+    this.lodStats.groundChunks = this.chunks.length;
+    if (this.chunks.length) {
+      const cutoff = fogFar * 1.6;
+      let groundVisible = 0;
+      for (const chunk of this.chunks) {
+        const sphere = chunk.geometry.boundingSphere;
+        if (!sphere) continue;
+        const dx = sphere.center.x - cx;
+        const dz = sphere.center.z - cz;
+        const d = Math.sqrt(dx * dx + dz * dz) - sphere.radius;
+        const show = d < cutoff;
+        if (chunk.visible !== show) chunk.visible = show;
+        if (show) groundVisible += 1;
+      }
+      this.lodStats.groundVisible = groundVisible;
+    }
   }
 
   async _scatter() {

@@ -118,6 +118,11 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.shadowMap.enabled = true;
+// The shadow map is a second submission of every caster in the scene, and the
+// sun follows the truck, so it only needs refreshing at a twentieth of a
+// second. The render loop asks for an update on that cadence instead.
+renderer.shadowMap.autoUpdate = false;
+renderer.shadowMap.needsUpdate = true;
 app.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -991,6 +996,7 @@ const hud = {
 };
 
 let hudTimer = 0;
+let shadowTimer = 0;
 
 function updateHud(dt) {
   const telemetry = vehicle.getTelemetry();
@@ -1357,6 +1363,15 @@ function frame(now) {
   if (!inLobby && !expeditionHUD.visible) expeditionHUD.show();
   expeditionHUD.update(dt, now, telemetry);
   settingsUI.update(dt);
+
+  // 20 Hz shadow refresh. autoUpdate is off, so this is what keeps the sun's
+  // shadows following the truck; it costs one 5 ms shadow pass every 50 ms
+  // instead of one every frame.
+  shadowTimer += dt;
+  if (shadowTimer >= 0.05) {
+    shadowTimer = 0;
+    renderer.shadowMap.needsUpdate = true;
+  }
 
   // The atmosphere owns the sun, the sky dome and the final render pass.
   sky.position.copy(camera.position);

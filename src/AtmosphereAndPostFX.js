@@ -233,6 +233,14 @@ export class AtmosphereAndPostFX {
       0.5, // radius
       0.95, // threshold
     );
+    // Bloom is a chain of full-screen mip blurs, so its cost is pure fill. At
+    // the strength the game actually runs it (0.12) the difference between a
+    // full-resolution and a half-resolution bloom chain is invisible, and the
+    // halved fill is the cheapest frame time in the whole pipeline.
+    const bloomSetSize = this.bloom.setSize.bind(this.bloom);
+    this.bloom.setSize = (width, height) => {
+      bloomSetSize(Math.max(64, Math.round(width * 0.5)), Math.max(64, Math.round(height * 0.5)));
+    };
     this.composer.addPass(this.bloom);
 
     // Film grade: lift saturation, add a gentle S-curve and split the shadows
