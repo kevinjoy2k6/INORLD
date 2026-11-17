@@ -1237,11 +1237,12 @@ export class TerrainSystem {
 
     this.detailTexture = this._buildDetailTexture();
 
-    this.material = new THREE.MeshStandardMaterial({
+    // Lambert, not Standard. The ground is flat-shaded, rough, and fills half
+    // the screen, so PBR's specular and Fresnel terms are pure waste per pixel;
+    // diffuse + fog is all this surface has ever shown.
+    this.material = new THREE.MeshLambertMaterial({
       vertexColors: true,
       map: this.detailTexture,
-      roughness: 0.93,
-      metalness: 0.02,
     });
     this.material.name = 'TerrainMaterial';
 

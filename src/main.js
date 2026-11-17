@@ -997,6 +997,7 @@ const hud = {
 
 let hudTimer = 0;
 let shadowTimer = 0;
+let hudRefresh = 0;
 
 function updateHud(dt) {
   const telemetry = vehicle.getTelemetry();
@@ -1242,9 +1243,13 @@ function frame(now) {
 
   readDriverInput(dt);
 
-  accumulator += dt;
+  // Never let a slow frame snowball. Catching up five physics ticks makes the
+  // next frame slower again, and that is how a 20 FPS machine slides to 4. Three
+  // ticks of catch-up keeps the truck responsive and stops the simulation from
+  // eating the frame it is trying to save; anything older is simply dropped.
+  accumulator += Math.min(dt, step * 3);
   let ticks = 0;
-  while (accumulator >= step && ticks < 5) {
+  while (accumulator >= step && ticks < 3) {
     vehicle.beginFrame();
     trailer.beginFrame();
     for (let i = 0; i < subSteps; i += 1) {
@@ -1255,7 +1260,7 @@ function frame(now) {
     accumulator -= step;
     ticks += 1;
   }
-  if (ticks >= 5) accumulator = 0;
+  if (ticks >= 3) accumulator = 0;
 
   vehicle.syncVisuals(accumulator / step, dt);
   trailer.syncVisuals(accumulator / step);
@@ -1361,8 +1366,15 @@ function frame(now) {
   const inLobby = ui ? ui._inLobby !== false : !(lobbyElement && lobbyElement.style.display === 'none');
   if (inLobby && expeditionHUD.visible) expeditionHUD.hide();
   if (!inLobby && !expeditionHUD.visible) expeditionHUD.show();
-  expeditionHUD.update(dt, now, telemetry);
-  settingsUI.update(dt);
+  // Instruments and the settings panel are DOM writes: reading a dozen values
+  // and pushing them into the page costs more than the render on a weak CPU.
+  // Twelve refreshes a second is indistinguishable from sixty for readouts.
+  hudRefresh += dt;
+  if (hudRefresh >= 0.08) {
+    hudRefresh = 0;
+    expeditionHUD.update(dt, now, telemetry);
+    settingsUI.update(dt);
+  }
 
   // 20 Hz shadow refresh. autoUpdate is off, so this is what keeps the sun's
   // shadows following the truck; it costs one 5 ms shadow pass every 50 ms
@@ -1399,8 +1411,11 @@ function frame(now) {
  * ------------------------------------------------------------------ */
 
 const governor = {
-  cap: Math.min(window.devicePixelRatio || 1, 2),
-  current: Math.min(window.devicePixelRatio || 1, 2),
+  // Rendering above 1.5x on a pitch-and-yaw chase camera is pixels nobody can
+  // see; 1.5 keeps text and the truck crisp while cutting fill by 44% on a
+  // 2x display.
+  cap: Math.min(window.devicePixelRatio || 1, 1.5),
+  current: Math.min(window.devicePixelRatio || 1, 1.5),
   accumulator: 0,
   frames: 0,
   fps: 60,
@@ -1428,13 +1443,17 @@ function fpsGovernor(dt) {
   governor.accumulator = 0;
   governor.frames = 0;
 
-  const target = 50;
+  // 60 FPS is the target, not 50: the governor now bleeds resolution faster
+  // when a frame is badly over budget and only climbs back when there is real
+  // headroom, so it settles at 60 instead of hovering at 50.
+  const target = 60;
   let next = governor.current;
 
-  if (governor.fps < target - 8 && governor.current > 0.62) {
-    next = Math.max(0.62, governor.current - 0.14);
-  } else if (governor.fps > target + 12 && governor.current < governor.cap) {
-    next = Math.min(governor.cap, governor.current + 0.08);
+  if (governor.fps < target - 5 && governor.current > 0.45) {
+    const step = governor.fps < 36 ? 0.2 : 0.1;
+    next = Math.max(0.45, governor.current - step);
+  } else if (governor.fps > target + 10 && governor.current < governor.cap) {
+    next = Math.min(governor.cap, governor.current + 0.06);
   }
 
   if (Math.abs(next - governor.current) > 0.01) {

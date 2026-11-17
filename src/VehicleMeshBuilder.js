@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 /* ============================================================================
  * VehicleMeshBuilder — a rigged Land-Rover-Defender-style 110, built from code.
@@ -359,6 +360,95 @@ export class VehicleMeshBuilder {
       object.castShadow = !seeThrough;
       object.receiveShadow = !seeThrough;
     });
+
+    this.mergeStaticBody();
+  }
+
+  /**
+   * Collapse the static body panels into one mesh per material.
+   *
+   * The shell is assembled from roughly 190 small meshes that share 17
+   * materials, so the truck alone submitted ~190 draw calls every frame and
+   * again in every shadow pass — more than the whole terrain. Nothing in that
+   * set moves on its own: the wheels live on the axles, and body roll is a
+   * transform on the group. Baking each material's parts into a single mesh is
+   * therefore invisible, and repaint, headlights and cel shading keep working
+   * because the merged meshes borrow the same material instances.
+   *
+   * Skipped on purpose: named parts (the shell carries the ink outline),
+   * anything with userData (winch sockets hold mounted shackles), groups, and
+   * anything transparent or additively blended, where draw order matters.
+   */
+  mergeStaticBody() {
+    const body = this.bodyGroup;
+    if (!body || this._bodyMerged) return 0;
+
+    const protectedMeshes = new Set(Object.values(this.sockets || {}));
+    const byMaterial = new Map();
+    const victims = [];
+
+    for (const child of body.children) {
+      if (!child.isMesh || child.children.length) continue;
+      if (child.name) continue;
+      if (protectedMeshes.has(child)) continue;
+      if (child.userData && Object.keys(child.userData).length) continue;
+      const material = child.material;
+      if (!material || material.transparent) continue;
+      if (material.blending !== undefined && material.blending !== THREE.NormalBlending) continue;
+
+      const entry = byMaterial.get(material.uuid) || {
+        material,
+        meshes: [],
+        castShadow: false,
+        receiveShadow: false,
+      };
+      entry.meshes.push(child);
+      entry.castShadow = entry.castShadow || child.castShadow;
+      entry.receiveShadow = entry.receiveShadow || child.receiveShadow;
+      byMaterial.set(material.uuid, entry);
+      victims.push(child);
+    }
+
+    // Below a handful of parts the merge is not worth the bookkeeping.
+    if (victims.length < 8) return 0;
+
+    let merged = 0;
+    for (const entry of byMaterial.values()) {
+      const geometries = [];
+      for (const mesh of entry.meshes) {
+        mesh.updateMatrix();
+        const clone = mesh.geometry.clone();
+        clone.applyMatrix4(mesh.matrix);
+        const flat = clone.index ? clone.toNonIndexed() : clone;
+        if (!flat.attributes.normal) flat.computeVertexNormals();
+        if (!flat.attributes.uv) {
+          const count = flat.attributes.position.count;
+          flat.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(count * 2), 2));
+        }
+        // mergeGeometries needs an identical attribute set on every input.
+        for (const name of Object.keys(flat.attributes)) {
+          if (name !== 'position' && name !== 'normal' && name !== 'uv') flat.deleteAttribute(name);
+        }
+        geometries.push(flat);
+      }
+
+      const geometry = mergeGeometries(geometries, false);
+      if (!geometry) continue;
+
+      const mesh = new THREE.Mesh(geometry, entry.material);
+      mesh.name = `BodyMerged_${merged}`;
+      mesh.castShadow = entry.castShadow;
+      mesh.receiveShadow = entry.receiveShadow;
+      body.add(mesh);
+      merged += 1;
+    }
+
+    // Left in place rather than disposed: some parts share a geometry with
+    // meshes outside the body group, and a wrong dispose is a blank truck.
+    for (const mesh of victims) body.remove(mesh);
+
+    this._bodyMerged = true;
+    return merged;
   }
 
   /* ================= chassis & drivetrain ================= */

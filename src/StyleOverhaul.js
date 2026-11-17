@@ -74,6 +74,66 @@ export function applyStylePalette() {
   }
 }
 
+/**
+ * Tileable value-noise cloud field, baked once into a texture.
+ *
+ * The sky used to evaluate four octaves of noise in the fragment shader for
+ * every pixel above the horizon; on an integrated GPU that was a fifth of the
+ * frame. The same field is now built on the CPU at start-up and read back with
+ * two texture fetches, which is free in comparison and looks identical.
+ */
+function makeCloudNoiseTexture(size = 256) {
+  const data = new Uint8Array(size * size * 4);
+  const hash = (x, y) => {
+    const n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
+    return n - Math.floor(n);
+  };
+  const wrap = (i, period) => ((i % period) + period) % period;
+  const noise = (x, y, period) => {
+    const x0 = Math.floor(x);
+    const y0 = Math.floor(y);
+    const fx = x - x0;
+    const fy = y - y0;
+    const ux = fx * fx * (3 - 2 * fx);
+    const uy = fy * fy * (3 - 2 * fy);
+    const a = hash(wrap(x0, period), wrap(y0, period));
+    const b = hash(wrap(x0 + 1, period), wrap(y0, period));
+    const c = hash(wrap(x0, period), wrap(y0 + 1, period));
+    const d = hash(wrap(x0 + 1, period), wrap(y0 + 1, period));
+    return (a * (1 - ux) + b * ux) * (1 - uy) + (c * (1 - ux) + d * ux) * uy;
+  };
+
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const u = x / size;
+      const v = y / size;
+      let value = 0;
+      let amp = 0.5;
+      let period = 4;
+      for (let octave = 0; octave < 4; octave += 1) {
+        value += noise(u * period, v * period, period) * amp;
+        amp *= 0.5;
+        period *= 2;
+      }
+      const shade = Math.max(0, Math.min(255, Math.round((value / 0.94) * 255)));
+      const i = (y * size + x) * 4;
+      data[i] = shade;
+      data[i + 1] = shade;
+      data[i + 2] = shade;
+      data[i + 3] = 255;
+    }
+  }
+
+  const texture = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.magFilter = THREE.LinearFilter;
+  texture.minFilter = THREE.LinearMipmapLinearFilter;
+  texture.generateMipmaps = true;
+  texture.needsUpdate = true;
+  return texture;
+}
+
 export class StyleOverhaul {
   constructor({ scene, atmosphere, renderer, terrain, vehicle, water, styleDNA }) {
     this.scene = scene;
@@ -232,6 +292,7 @@ export class StyleOverhaul {
         sunColour: { value: new THREE.Color(PALETTE.sun) },
         cloudLit: { value: new THREE.Color(0xfffdf8) },
         cloudShade: { value: new THREE.Color(0x6b7d9c) },
+        cloudNoise: { value: makeCloudNoiseTexture(256) },
         uCloudCover: { value: 0.5 },
         uTime: { value: 0 },
       },
@@ -250,35 +311,8 @@ export class StyleOverhaul {
         uniform vec3 cloudShade;
         uniform float uCloudCover;
         uniform float uTime;
+        uniform sampler2D cloudNoise;
         varying vec3 vDir;
-
-        float hash21( vec2 p ) {
-          p = fract( p * vec2( 123.34, 456.21 ) );
-          p += dot( p, p + 45.32 );
-          return fract( p.x * p.y );
-        }
-
-        float vnoise( vec2 p ) {
-          vec2 i = floor( p );
-          vec2 f = fract( p );
-          vec2 u = f * f * ( 3.0 - 2.0 * f );
-          float a = hash21( i );
-          float b = hash21( i + vec2( 1.0, 0.0 ) );
-          float c = hash21( i + vec2( 0.0, 1.0 ) );
-          float d = hash21( i + vec2( 1.0, 1.0 ) );
-          return mix( mix( a, b, u.x ), mix( c, d, u.x ), u.y );
-        }
-
-        float fbm( vec2 p ) {
-          float sum = 0.0;
-          float amp = 0.5;
-          for ( int i = 0; i < 3; i++ ) {
-            sum += vnoise( p ) * amp;
-            p = p * 2.03 + 17.0;
-            amp *= 0.5;
-          }
-          return sum;
-        }
 
         void main() {
           vec3 dir = normalize( vDir );
@@ -306,9 +340,10 @@ export class StyleOverhaul {
           vec2 uv = dir.xz / max( h, 0.045 );
           uv = uv * 0.55 + vec2( uTime * 0.005, uTime * 0.002 );
 
-          // Large masses decide where clouds sit; finer detail carves the puffs.
-          float mass = fbm( uv * 0.55 );
-          float detail = fbm( uv * 1.7 + mass * 0.9 );
+          // The noise field is a baked, tileable texture: two fetches replace
+          // what used to be six analytic octaves per pixel.
+          float mass = texture2D( cloudNoise, uv * 0.32 ).r;
+          float detail = texture2D( cloudNoise, uv * 1.15 + vec2( 0.37, 0.11 ) ).r;
           float density = mass * 0.75 + detail * 0.45;
           float cover = smoothstep( uCloudCover, uCloudCover + 0.09, density );
           // Dissolve into the haze band at the horizon rather than ending on a
