@@ -134,15 +134,16 @@ export class Landmarks {
 
     const polePositions = [];
     const poleYaw = [];
-    const wirePairs = [];
 
     for (const road of ROADS) {
       const isRoad = road.kind === 'road';
       const offset = road.width + 4.2;
 
       walkPath(road.points, isRoad ? 26 : 34, (p) => {
-        // Poles stand on the outside of the bend, alternating sides.
-        const side = polePositions.length % 2 === 0 ? 1 : -1;
+        // One side of the road for the whole run. Alternating sides put a pole
+        // on the left, then the right, then the left, so the line of posts
+        // zig-zagged across the road instead of following it.
+        const side = isRoad ? 1 : -1;
         const px = p.x + p.dirZ * offset * side;
         const pz = p.z - p.dirX * offset * side;
         const index = terrain._indexAt(px, pz);
@@ -194,34 +195,12 @@ export class Landmarks {
       this.group.add(trunks, arms);
       this.stats.poles = P;
 
-      /* ---- catenary wires between consecutive poles on the same road ---- */
-      const vertices = [];
-      for (let i = 1; i < P; i += 1) {
-        const a = polePositions[i - 1];
-        const b = polePositions[i];
-        const span = Math.hypot(b.x - a.x, b.z - a.z);
-        if (span > 42) continue; // poles on different roads: no wire
-        const sag = Math.min(1.1, span * 0.035);
-        const steps = 5;
-        for (let s = 0; s < steps; s += 1) {
-          const t0 = s / steps;
-          const t1 = (s + 1) / steps;
-          for (const level of [6.5, 5.65]) {
-            const y0 = a.y + level + Math.sin(Math.PI * t0) * -sag;
-            const y1 = a.y + level + Math.sin(Math.PI * t1) * -sag;
-            vertices.push(
-              a.x + (b.x - a.x) * t0, y0, a.z + (b.z - a.z) * t0,
-              a.x + (b.x - a.x) * t1, y1, a.z + (b.z - a.z) * t1,
-            );
-          }
-        }
-        wirePairs.push([a, b]);
-      }
-      if (vertices.length) {
-        const wireGeo = new THREE.BufferGeometry();
-        wireGeo.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
-        this.group.add(new THREE.LineSegments(wireGeo, m.wire));
-      }
+      /* ---- no wires ----
+       * The catenary spans used to be drawn between consecutive poles with no
+       * idea of which road each pole belonged to, so they ran between poles on
+       * different roads and crossed the trail as a web of lines across the sky.
+       * The posts are roadside markers now, and markers do not carry cable.
+       */
     }
 
   }

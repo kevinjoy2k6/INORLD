@@ -86,6 +86,9 @@ function showFatal(message, detail) {
 }
 
 window.addEventListener('error', (event) => {
+  // Keep the stack reachable for the console: the overlay only has room for a
+  // line, and a one-line message is rarely enough to find the fault.
+  window.__fatal = { message: event.message || String(event.error || event), stack: event.error?.stack || null };
   showFatal('An unexpected error stopped the game.', event.message || String(event.error || event));
 });
 window.addEventListener('unhandledrejection', (event) => {
@@ -507,8 +510,8 @@ const audio = new VehicleAudioController({
   winchSystem,
 });
 
-// Exposed for the audio lab and for console tuning. Read-only by convention.
-window.__game = { audio, vehicle, cameraController, terrain, atmosphere };
+// Exposed for the audio lab, the perf probes and console tuning.
+window.__game = { audio, vehicle, cameraController, terrain, atmosphere, renderer, scene, camera, quality, world };
 
 // ?audiolab runs the scripted test drive once the mixer is unlocked.
 const audioLabEnabled = new URLSearchParams(window.location.search).has('audiolab');
@@ -1332,6 +1335,9 @@ function frame(now) {
     }
   }
   terrain.updateFoliage(dt, foliageTrucks);
+  // Distance LOD for props and ground cover: chunks past the fog are not drawn,
+  // and chunks past the near threshold fall back to a proxy.
+  terrain.updateLOD(camera);
 
   // Host owns the clock — ship it to the squad a few times a minute.
   if (networkManager.isHost) {

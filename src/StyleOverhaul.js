@@ -211,10 +211,10 @@ export class StyleOverhaul {
   /* ---------------- sky ---------------- */
 
   /**
-   * A two-colour gradient dome. The physical Sky shader is beautiful but its
-   * colours are meteorological, not art-directed: this locks the horizon to
-   * warm peach and the zenith to pale blue, which is what makes distant ridges
-   * separate into planes.
+   * A two-colour gradient dome with procedural cumulus, shaded into the sky
+   * itself. Clouds painted into the dome cost nothing extra to draw and cannot
+   * be sorted, depth-tested or faded out of the frame the way separate cloud
+   * geometry can: whatever the camera does, the sky shows them.
    */
   _buildSky() {
     const atmosphere = this.atmosphere;
@@ -230,6 +230,10 @@ export class StyleOverhaul {
         zenithColour: { value: new THREE.Color(PALETTE.skyUpper) },
         sunDir: { value: new THREE.Vector3(0.4, 0.6, 0.3) },
         sunColour: { value: new THREE.Color(PALETTE.sun) },
+        cloudLit: { value: new THREE.Color(0xfffdf8) },
+        cloudShade: { value: new THREE.Color(0x6b7d9c) },
+        uCloudCover: { value: 0.5 },
+        uTime: { value: 0 },
       },
       vertexShader: `
         varying vec3 vDir;
@@ -242,16 +246,81 @@ export class StyleOverhaul {
         uniform vec3 zenithColour;
         uniform vec3 sunColour;
         uniform vec3 sunDir;
+        uniform vec3 cloudLit;
+        uniform vec3 cloudShade;
+        uniform float uCloudCover;
+        uniform float uTime;
         varying vec3 vDir;
 
+        float hash21( vec2 p ) {
+          p = fract( p * vec2( 123.34, 456.21 ) );
+          p += dot( p, p + 45.32 );
+          return fract( p.x * p.y );
+        }
+
+        float vnoise( vec2 p ) {
+          vec2 i = floor( p );
+          vec2 f = fract( p );
+          vec2 u = f * f * ( 3.0 - 2.0 * f );
+          float a = hash21( i );
+          float b = hash21( i + vec2( 1.0, 0.0 ) );
+          float c = hash21( i + vec2( 0.0, 1.0 ) );
+          float d = hash21( i + vec2( 1.0, 1.0 ) );
+          return mix( mix( a, b, u.x ), mix( c, d, u.x ), u.y );
+        }
+
+        float fbm( vec2 p ) {
+          float sum = 0.0;
+          float amp = 0.5;
+          for ( int i = 0; i < 3; i++ ) {
+            sum += vnoise( p ) * amp;
+            p = p * 2.03 + 17.0;
+            amp *= 0.5;
+          }
+          return sum;
+        }
+
         void main() {
-          float h = clamp( vDir.y, -1.0, 1.0 );
+          vec3 dir = normalize( vDir );
+          float h = clamp( dir.y, -1.0, 1.0 );
           vec3 colour = mix( horizonColour, zenithColour, smoothstep( -0.02, 0.62, h ) );
 
           // Warm bloom around the sun, and a slightly warmer haze band low down.
-          float sun = max( dot( normalize( vDir ), normalize( sunDir ) ), 0.0 );
+          float sun = max( dot( dir, normalize( sunDir ) ), 0.0 );
           colour += sunColour * pow( sun, 18.0 ) * 0.35;
           colour = mix( colour, horizonColour, smoothstep( 0.18, -0.12, h ) * 0.55 );
+
+          // Everything below the horizon is painted over by terrain, so skip
+          // the cloud maths there: it is most of the dome, and noise is not
+          // free on an integrated GPU.
+          if ( h < 0.004 ) {
+            gl_FragColor = vec4( colour, 1.0 );
+            return;
+          }
+
+          // --- cumulus -------------------------------------------------
+          // Project the view ray onto a cloud plane. Dividing by height gives
+          // the deck perspective: clouds crowd toward the horizon and open out
+          // overhead instead of hanging like wallpaper behind the ridge. The
+          // plane is clamped so the horizon does not smear into infinity.
+          vec2 uv = dir.xz / max( h, 0.045 );
+          uv = uv * 0.55 + vec2( uTime * 0.005, uTime * 0.002 );
+
+          // Large masses decide where clouds sit; finer detail carves the puffs.
+          float mass = fbm( uv * 0.55 );
+          float detail = fbm( uv * 1.7 + mass * 0.9 );
+          float density = mass * 0.75 + detail * 0.45;
+          float cover = smoothstep( uCloudCover, uCloudCover + 0.09, density );
+          // Dissolve into the haze band at the horizon rather than ending on a
+          // hard cut above the ridge line.
+          cover *= smoothstep( 0.004, 0.07, h );
+
+          // Bright tops, cool bellies: density doubles as a height cue.
+          float lit = 0.05 + 0.95 * smoothstep( 0.16, 0.52, density );
+          vec3 cloud = mix( cloudShade, cloudLit, lit );
+          cloud += sunColour * pow( sun, 6.0 ) * 0.16;
+
+          colour = mix( colour, cloud, cover * 0.94 );
 
           gl_FragColor = vec4( colour, 1.0 );
         }`,
@@ -261,6 +330,18 @@ export class StyleOverhaul {
     dome.name = 'StyleSky';
     dome.frustumCulled = false;
     dome.renderOrder = -1;
+    // Advance the drift and re-centre the dome on the camera at draw time. The
+    // dome used to be positioned once in tick(), so as soon as the truck drove
+    // far enough the camera sat outside the sphere and the shader (and every
+    // cloud in it) was simply never seen. onBeforeRender runs before three
+    // builds the model-view matrix, so moving the dome here is safe and keeps
+    // the sky glued to the horizon wherever the truck goes.
+    dome.onBeforeRender = (renderer, scene, camera) => {
+      material.uniforms.uTime.value = performance.now() * 0.001;
+      dome.position.copy(camera.position);
+      dome.scale.setScalar(Math.max(700, camera.far * 0.92));
+      dome.updateMatrixWorld(true);
+    };
     this.scene.add(dome);
     this.sky = dome;
     return dome;

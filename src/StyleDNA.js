@@ -9,9 +9,8 @@
  *   2. Selective ink: the truck carries a thin inverted-hull outline; nothing
  *      organic does, because outlines on grass and clouds kill the painterly
  *      feel.
- *   3. The sky gets hand-painted cumulus billboards, and the whole frame is
- *      graded toward the current region's palette — warm highlights, lifted
- *      teal/violet shadows, teal-to-peach height fog.
+ *   3. The whole frame is graded toward the current region's palette — warm
+ *      highlights, lifted teal/violet shadows, teal-to-peach height fog.
  * ========================================================================== */
 
 import * as THREE from 'three';
@@ -118,120 +117,7 @@ export function addInkOutline(mesh, { thickness = 1.022, color = 0x1c1a20 } = {}
   return hull;
 }
 
-/* ------------------------------------------------------------------ *
- *  painted cumulus
- * ------------------------------------------------------------------ */
 
-export function createCloudDeck(scene, { count = 14, seed = 7 } = {}) {
-  let state = seed >>> 0;
-  const random = () => {
-    state = (state * 1664525 + 1013904223) >>> 0;
-    return state / 4294967296;
-  };
-
-  // Painted cumulus as actual geometry: each cloud is a cluster of squashed
-  // low-poly puffs, so it has a lit top and a shadowed underside you can see
-  // from the ground. The old billboard deck read as a fan of overlapping
-  // arcs from below, which is the one angle a cloud is always seen at.
-  const clouds = [];
-  const puffs = [];
-
-  for (let i = 0; i < count; i += 1) {
-    const cloud = {
-      angle: (i / count) * Math.PI * 2 + random() * 0.5,
-      radius: 180 + random() * 240,
-      height: 88 + random() * 66,
-      scale: 58 + random() * 62,
-      drift: (0.0035 + random() * 0.005) * (random() < 0.5 ? -1 : 1),
-      phase: random() * Math.PI * 2,
-    };
-    clouds.push(cloud);
-
-    const cluster = 9 + Math.floor(random() * 6);
-    for (let k = 0; k < cluster; k += 1) {
-      const spread = cloud.scale;
-      const ox = (random() - 0.5) * 1.25 * spread;
-      const oz = (random() - 0.5) * 0.85 * spread;
-      // Puffs bunch toward the middle so the silhouette is a mound, not a bar.
-      const falloff = 1 - Math.min(1, Math.hypot(ox / spread, oz / spread));
-      const oy = (random() * 0.55 - 0.18) * spread * (0.35 + falloff) + spread * 0.12;
-      puffs.push({
-        cloud: i,
-        ox,
-        oy,
-        oz,
-        radius: spread * (0.21 + random() * 0.17),
-        flatten: 0.6 + random() * 0.25,
-        lift: falloff,
-      });
-    }
-  }
-
-  const geometry = new THREE.IcosahedronGeometry(1, 1);
-  const material = new THREE.MeshStandardMaterial({
-    roughness: 1,
-    metalness: 0,
-    flatShading: true,
-    // Clouds live above the weather, so the ground fog must not eat them.
-    fog: false,
-  });
-  material.name = 'CumulusPaint';
-
-  const mesh = new THREE.InstancedMesh(geometry, material, puffs.length);
-  mesh.name = 'CloudDeck';
-  mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  // The deck surrounds the camera, so its own bounds are meaningless.
-  mesh.frustumCulled = false;
-  mesh.castShadow = false;
-  mesh.receiveShadow = false;
-
-  // Sunlit crowns fade to warm white; bellies sit in cool lavender shade.
-  const lit = new THREE.Color(0xfff6e6);
-  const belly = new THREE.Color(0x94a0c6);
-  const colour = new THREE.Color();
-  for (let i = 0; i < puffs.length; i += 1) {
-    const puff = puffs[i];
-    colour.copy(belly).lerp(lit, THREE.MathUtils.clamp(0.35 + puff.lift * 0.75, 0, 1));
-    mesh.setColorAt(i, colour);
-  }
-  if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-
-  scene.add(mesh);
-
-  const dummy = new THREE.Object3D();
-
-  return {
-    group: mesh,
-    clouds,
-    puffs,
-    update(dt, camera) {
-      const cx = camera.position.x;
-      const cz = camera.position.z;
-      for (const cloud of clouds) {
-        cloud.angle += cloud.drift * dt * 0.6;
-      }
-      for (let i = 0; i < puffs.length; i += 1) {
-        const puff = puffs[i];
-        const cloud = clouds[puff.cloud];
-        const cos = Math.cos(cloud.angle);
-        const sin = Math.sin(cloud.angle);
-        // Offset the puff in the cloud's own frame, then place the cloud on its
-        // ring around the camera.
-        dummy.position.set(
-          cx + cos * cloud.radius - sin * puff.ox,
-          cloud.height + puff.oy,
-          cz + sin * cloud.radius + cos * puff.ox,
-        );
-        dummy.position.z += puff.oz;
-        dummy.rotation.set(0, cloud.phase, 0);
-        dummy.scale.set(puff.radius, puff.radius * puff.flatten, puff.radius);
-        dummy.updateMatrix();
-        mesh.setMatrixAt(i, dummy.matrix);
-      }
-      mesh.instanceMatrix.needsUpdate = true;
-    },
-  };
-}
 
 /* ------------------------------------------------------------------ *
  *  region grading
@@ -245,7 +131,6 @@ export class StyleDNA {
     this.vehicle = vehicle;
     this.quality = quality;
 
-    this.clouds = createCloudDeck(scene, { count: quality?.settings?.tier === 'LOW' ? 8 : 14 });
     this.region = null;
     this.blend = 1;
     this._fogTarget = new THREE.Color();
@@ -282,8 +167,6 @@ export class StyleDNA {
 
   update(dt) {
     if (!this.enabled) return;
-    this.clouds.update(dt, this.camera);
-
     const p = this.vehicle.body.position;
     const region = regionAt(p.x, p.z);
     this.region = region;

@@ -383,6 +383,16 @@ export class TerrainSystem {
     this._bq = new THREE.Quaternion();
     this._bs = new THREE.Vector3();
 
+    // Props and foliage are split into square chunks so each one can be culled
+    // on its own. One 2 km-wide instanced mesh can never be frustum-culled, so
+    // without this every tree and blade in the valley is submitted on every
+    // frame and again in every shadow pass.
+    this._chunkSize = 150;
+    this._lodGroups = [];
+    this._lodChunks = [];
+    this._densityMeshes = [];
+    this.lodStats = { groups: 0, chunks: 0, near: 0, far: 0, hidden: 0 };
+
     // Tall grass is scenery, not a wall. Where it grows thick the surface gets
     // a hair less grip and a little more rolling resistance, which reads as
     // "the truck is swishing through a meadow" instead of "the truck hit a
@@ -447,8 +457,27 @@ export class TerrainSystem {
    */
   async _yield() {
     if (performance.now() - this._yieldAt < 6) return;
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    // A MessageChannel hop is a macrotask with no clamp. setTimeout(0) is
+    // delayed to a full second in a background tab, which turned a chunked
+    // build that yields properly into a minute of sitting at 3% for anyone who
+    // opened the game in a background tab.
+    await this._nextTask();
     this._yieldAt = performance.now();
+  }
+
+  _nextTask() {
+    if (!this._taskHop) {
+      const channel = new MessageChannel();
+      this._taskHop = { channel, queue: [] };
+      channel.port1.onmessage = () => {
+        const resolve = this._taskHop.queue.shift();
+        if (resolve) resolve();
+      };
+    }
+    return new Promise((resolve) => {
+      this._taskHop.queue.push(resolve);
+      this._taskHop.channel.port2.postMessage(0);
+    });
   }
 
   /* ---------------- layout ---------------- */
@@ -1371,6 +1400,159 @@ export class TerrainSystem {
     return Math.abs(x - center.x) < halfWidth + 6 && Math.abs(z - center.z) < halfDepth + 6;
   }
 
+  /* ---------------- render chunking + distance LOD ---------------- */
+
+  /**
+   * Split a set of placed instances into spatial chunks.
+   *
+   * Instances keep their world matrices, so a chunk is just a smaller instanced
+   * mesh that covers one square of the map. `near` distances swap in a cheap
+   * proxy geometry (`far`) so a tree two hundred metres away is a silhouette
+   * instead of a seven-sided cone, and anything past the fog is not drawn at
+   * all. `trackRefs` records where each global instance ended up, which is what
+   * lets a rolling boulder keep its visual in sync with its rigid body.
+   */
+  _chunkify({ name, sources, far = null, nearScale = 0.55, maxScale = 1.05, trackRefs = false }) {
+    const chunkSize = this._chunkSize;
+    const base = sources[0];
+    const count = base.matrices.length;
+    const buckets = new Map();
+    const indexMap = trackRefs ? new Array(count).fill(null) : null;
+
+    for (let i = 0; i < count; i += 1) {
+      const e = base.matrices[i].elements;
+      const key = `${Math.floor(e[12] / chunkSize)},${Math.floor(e[14] / chunkSize)}`;
+      let bucket = buckets.get(key);
+      if (!bucket) {
+        bucket = { key, items: [] };
+        buckets.set(key, bucket);
+      }
+      bucket.items.push(i);
+    }
+
+    const group = { name, chunks: [], nearScale, maxScale, hasFar: !!far };
+
+    for (const bucket of buckets.values()) {
+      const items = bucket.items;
+      const n = items.length;
+      let centerX = 0;
+      let centerZ = 0;
+      for (const i of items) {
+        centerX += base.matrices[i].elements[12];
+        centerZ += base.matrices[i].elements[14];
+      }
+      const chunk = {
+        name,
+        indices: items,
+        center: new THREE.Vector3(centerX / n, 0, centerZ / n),
+        radius: chunkSize * 0.75,
+        meshes: [],
+        farMeshes: [],
+      };
+
+      for (const source of sources) {
+        const mesh = new THREE.InstancedMesh(source.geometry, source.material, n);
+        mesh.name = `${name}Chunk_${bucket.key}`;
+        mesh.castShadow = !!source.castShadow;
+        mesh.receiveShadow = !!source.receiveShadow;
+        mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+        const palette = source.colors
+          ? new THREE.InstancedBufferAttribute(new Float32Array(n * 3), 3)
+          : null;
+        for (let k = 0; k < n; k += 1) {
+          const gi = items[k];
+          mesh.setMatrixAt(k, source.matrices[gi]);
+          if (palette) {
+            const c = source.colors[gi];
+            palette.setXYZ(k, c.r, c.g, c.b);
+          }
+        }
+        mesh.instanceMatrix.needsUpdate = true;
+        if (palette) mesh.instanceColor = palette;
+        mesh.userData.maxInstances = n;
+        mesh.computeBoundingSphere();
+        this.group.add(mesh);
+        chunk.meshes.push(mesh);
+        if (indexMap) {
+          for (let k = 0; k < n; k += 1) indexMap[items[k]] = { near: { mesh, index: k }, far: null };
+        }
+      }
+
+      if (far) {
+        const farMesh = new THREE.InstancedMesh(far.geometry, far.material, n);
+        farMesh.name = `${name}Far_${bucket.key}`;
+        farMesh.castShadow = false;
+        farMesh.receiveShadow = false;
+        farMesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+        for (let k = 0; k < n; k += 1) farMesh.setMatrixAt(k, base.matrices[items[k]]);
+        farMesh.instanceMatrix.needsUpdate = true;
+        farMesh.computeBoundingSphere();
+        farMesh.visible = false;
+        this.group.add(farMesh);
+        chunk.farMeshes.push(farMesh);
+        if (indexMap) {
+          for (let k = 0; k < n; k += 1) {
+            const entry = indexMap[items[k]];
+            if (entry) entry.far = { mesh: farMesh, index: k };
+          }
+        }
+      }
+
+      group.chunks.push(chunk);
+      this._lodChunks.push(chunk);
+    }
+
+    // `indexMap` is only built when the caller needs to follow individual
+    // instances (rolling stones); it is null otherwise.
+    group.indexMap = indexMap;
+    this._lodGroups.push(group);
+    return group;
+  }
+
+  /**
+   * Distance LOD, once per frame.
+   *
+   * The fog distance sets the outer limit: anything the fog has already erased
+   * costs nothing to leave out. Between the near and far thresholds a chunk is
+   * drawn with its proxy geometry, and only chunks inside the near distance get
+   * the full mesh, shadows included.
+   */
+  updateLOD(camera) {
+    if (!this._lodGroups.length || !camera) return;
+    const fogFar = this.scene?.fog?.far ?? 320;
+    const outer = Math.max(140, fogFar * 1.08);
+    const cx = camera.position.x;
+    const cz = camera.position.z;
+    let near = 0;
+    let far = 0;
+
+    for (const group of this._lodGroups) {
+      const nearDist = Math.max(55, outer * group.nearScale);
+      const farDist = Math.min(outer, outer * group.maxScale);
+      for (const chunk of group.chunks) {
+        const dx = chunk.center.x - cx;
+        const dz = chunk.center.z - cz;
+        const d = Math.sqrt(dx * dx + dz * dz) - chunk.radius;
+        const showNear = d < nearDist;
+        const showFar = !showNear && group.hasFar && d < farDist;
+        for (const mesh of chunk.meshes) {
+          mesh.visible = showNear && mesh.userData.active !== false && mesh.count > 0;
+        }
+        for (const mesh of chunk.farMeshes) {
+          mesh.visible = showFar && mesh.count > 0;
+        }
+        if (showNear) near += 1;
+        else if (showFar) far += 1;
+      }
+    }
+
+    this.lodStats.groups = this._lodGroups.length;
+    this.lodStats.chunks = this._lodChunks.length;
+    this.lodStats.near = near;
+    this.lodStats.far = far;
+    this.lodStats.hidden = this._lodChunks.length - near - far;
+  }
+
   async _scatter() {
     const random = mulberry32(this.seed ^ 0x2545f491);
 
@@ -1389,17 +1571,12 @@ export class TerrainSystem {
     const BOULDERS = 900;
     const POLES = 260;
 
-    const trunkMesh = new THREE.InstancedMesh(trunkGeometry, trunkMaterial, TREES);
-    const pineMesh = new THREE.InstancedMesh(pineGeometry, pineMaterial, TREES);
-    const boulderMesh = new THREE.InstancedMesh(boulderGeometry, boulderMaterial, BOULDERS);
-    const poleMesh = new THREE.InstancedMesh(poleGeometry, poleMaterial, POLES);
-
-    for (const mesh of [trunkMesh, pineMesh, boulderMesh, poleMesh]) {
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
-      this.group.add(mesh);
-    }
+    // Placement collects matrices; the instanced meshes are built per spatial
+    // chunk afterwards so the renderer can cull them (see _chunkify).
+    const trunkMatrices = [];
+    const pineMatrices = [];
+    const boulderMatrices = [];
+    const poleMatrices = [];
 
     const matrix = new THREE.Matrix4();
     const quaternion = new THREE.Quaternion();
@@ -1437,11 +1614,11 @@ export class TerrainSystem {
       position.set(x, h + 1.6 * height, z);
       scale.set(1, height, 1);
       matrix.compose(position, quaternion, scale);
-      trunkMesh.setMatrixAt(trees, matrix);
+      trunkMatrices.push(matrix.clone());
 
       position.set(x, h + 4.4 * height, z);
       matrix.compose(position, quaternion, scale);
-      pineMesh.setMatrixAt(trees, matrix);
+      pineMatrices.push(matrix.clone());
 
       const body = new CANNON.Body({ mass: 0, material: this.groundMaterial });
       body.addShape(new CANNON.Box(new CANNON.Vec3(0.3, 1.7 * height, 0.3)));
@@ -1457,14 +1634,12 @@ export class TerrainSystem {
       trees += 1;
     }
 
-    trunkMesh.count = trees;
-    pineMesh.count = trees;
     this.stats.trees = trees;
 
-    // Phase-7 wind: the pulse trees and their trunks keep references so the
-    // shared sway uniforms can be animated from updateFoliage().
+    // Phase-7 wind: the pine and trunk materials are the ones patched with the
+    // shared sway uniforms in _buildFoliage(), so the chunks inherit the wind
+    // by sharing them.
     this.treeMaterials = { trunk: trunkMaterial, pine: pineMaterial };
-    this.treeMeshes = { trunk: trunkMesh, pine: pineMesh };
 
     let boulders = 0;
     attempts = 0;
@@ -1491,7 +1666,7 @@ export class TerrainSystem {
       position.set(x, h + radius * lift, z);
       scale.set(radius, radius * squash, radius);
       matrix.compose(position, quaternion, scale);
-      boulderMesh.setMatrixAt(boulders, matrix);
+      boulderMatrices.push(matrix.clone());
 
       // Anything the truck could plausibly shoulder aside is a dynamic body.
       // Only genuine outcrops stay immovable, and those are big and obvious.
@@ -1527,7 +1702,6 @@ export class TerrainSystem {
       this._addAnchor('boulder', new THREE.Vector3(x, h, z), radius, body, radius * 0.7);
       boulders += 1;
     }
-    boulderMesh.count = boulders;
     this.stats.boulders = boulders;
 
     // Trail markers along the loop, offset from the driving line.
@@ -1539,25 +1713,29 @@ export class TerrainSystem {
       const length = Math.hypot(x1 - x0, z1 - z0);
       const dx = (x1 - x0) / length;
       const dz = (z1 - z0) / length;
-      const steps = Math.max(1, Math.round(length / 26));
+      const steps = Math.max(1, Math.round(length / 34));
 
       for (let s = 0; s < steps && poles < POLES; s += 1) {
         const t = (s + 0.5) / steps;
         const nx = -dz;
         const nz = dx;
-        const side = s % 2 === 0 ? 1 : -1;
-        const x = x0 + (x1 - x0) * t + nx * 5.2 * side;
-        const z = z0 + (z1 - z0) * t + nz * 5.2 * side;
+        // Every marker on the same side of the trail. Alternating sides placed
+        // them in a slalom across the road, which read as poles criss-crossing
+        // the trail instead of running along its shoulder.
+        const x = x0 + (x1 - x0) * t + nx * 5.6;
+        const z = z0 + (z1 - z0) * t + nz * 5.6;
         const h = this.getHeightAt(x, z);
         // No markers standing in the ford.
         if (h < WATER_LEVEL + 0.7 || this.waterGrid[this._indexAt(x, z)] > 0) continue;
-        const yaw = random() * Math.PI * 2;
+        // Face along the trail so a post reads as a line marker, not a stick
+        // dropped at a random angle.
+        const yaw = Math.atan2(dx, dz);
 
         quaternion.setFromEuler(new THREE.Euler(0, yaw, 0));
         position.set(x, h + 2.3, z);
         scale.set(1, 1, 1);
         matrix.compose(position, quaternion, scale);
-        poleMesh.setMatrixAt(poles, matrix);
+        poleMatrices.push(matrix.clone());
 
         // The posts are route markers. They still exist as winch anchors, but
         // they never collide — clipping a twig-thin stick should not stop a
@@ -1576,16 +1754,67 @@ export class TerrainSystem {
         poles += 1;
       }
     }
-    poleMesh.count = poles;
     this.stats.poles = poles;
     this.stats.anchors = this.winchAnchors.length;
 
-    for (const mesh of [trunkMesh, pineMesh, boulderMesh, poleMesh]) {
-      mesh.instanceMatrix.needsUpdate = true;
-      mesh.computeBoundingSphere();
+    /* ---- far proxies: what a distant prop is allowed to cost ---- */
+    // A pine at 300 m is a green silhouette, so it becomes a four-sided cone.
+    const farPineGeometry = new THREE.ConeGeometry(1.9, 6.4, 4, 1);
+    farPineGeometry.translate(0, 0, 0);
+    const farPineMaterial = pineMaterial.clone();
+    farPineMaterial.flatShading = true;
+    // A stone becomes a tetrahedron; its shading already reads as a lump.
+    const farBoulderGeometry = new THREE.TetrahedronGeometry(1, 0);
+    const farBoulderMaterial = boulderMaterial.clone();
+    farBoulderMaterial.flatShading = true;
+
+    this.treeChunks = this._chunkify({
+      name: 'Tree',
+      sources: [
+        { geometry: trunkGeometry, material: trunkMaterial, matrices: trunkMatrices, castShadow: true, receiveShadow: true },
+        { geometry: pineGeometry, material: pineMaterial, matrices: pineMatrices, castShadow: true, receiveShadow: true },
+      ],
+      far: { geometry: farPineGeometry, material: farPineMaterial },
+      nearScale: 0.52,
+      maxScale: 1.06,
+    });
+
+    const boulderChunks = this._chunkify({
+      name: 'Boulder',
+      sources: [
+        { geometry: boulderGeometry, material: boulderMaterial, matrices: boulderMatrices, castShadow: true, receiveShadow: true },
+      ],
+      far: { geometry: farBoulderGeometry, material: farBoulderMaterial },
+      nearScale: 0.46,
+      maxScale: 0.92,
+      trackRefs: true,
+    });
+
+    this.poleChunks = this._chunkify({
+      name: 'Pole',
+      sources: [
+        { geometry: poleGeometry, material: poleMaterial, matrices: poleMatrices, castShadow: true, receiveShadow: true },
+      ],
+      nearScale: 0.9,
+      maxScale: 1.0,
+    });
+
+    // Rolling stones follow their body: resolve each one to the chunk instance
+    // that draws it, near and far.
+    for (const entry of this.boulderBodies) {
+      const refs = boulderChunks.indexMap[entry.index];
+      entry.near = refs ? refs.near : null;
+      entry.far = refs ? refs.far : null;
     }
 
-    this.props = { trunkMesh, pineMesh, boulderMesh, poleMesh };
+    // Density and culling share these lists.
+    this._densityMeshes = [
+      ...this.treeChunks.chunks.flatMap((chunk) => chunk.meshes),
+      ...boulderChunks.chunks.flatMap((chunk) => chunk.meshes),
+      ...this.poleChunks.chunks.flatMap((chunk) => chunk.meshes),
+    ];
+    this.treeMeshes = { chunks: this.treeChunks.chunks };
+    this.props = { treeChunks: this.treeChunks, boulderChunks, poleChunks: this.poleChunks };
   }
 
   /* ---------------- Phase 7: living wilderness ---------------- */
@@ -1735,19 +1964,18 @@ export class TerrainSystem {
     const position = new THREE.Vector3();
     const color = new THREE.Color();
 
+    // How far each layer is allowed to be drawn. Grass is the expensive one and
+    // the least missed at distance, so it goes first; a bush reads as part of
+    // the ground anyway and can stay a little longer.
+    const LAYER_REACH = { grass: 0.24, fern: 0.3, reed: 0.34, bush: 0.42 };
+
     const makePatch = async (name, geometry, material, slots, accept) => {
-      const mesh = new THREE.InstancedMesh(geometry, material, slots);
-      mesh.userData.maxInstances = slots;
-      this._foliageMeshes.push(mesh);
-      mesh.name = `Foliage_${name}`;
-      mesh.castShadow = name !== 'grass';
-      mesh.receiveShadow = false;
-      mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
-      mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(slots * 3), 3);
+      const matrices = [];
+      const colors = [];
 
       let placed = 0;
       let attempts = 0;
-        const limit = slots * 26;
+      const limit = slots * 26;
       while (placed < slots && attempts < limit) {
         if ((attempts & 511) === 0) await this._yield();
         attempts += 1;
@@ -1768,11 +1996,12 @@ export class TerrainSystem {
         position.set(x, h - 0.05, z);
         scale.set(s, s * (0.8 + random() * 0.55), s);
         matrix.compose(position, quaternion, scale);
-        mesh.setMatrixAt(placed, matrix);
+        matrices.push(matrix.clone());
 
         color.copy(material.userData.baseColor || material.color);
         color.offsetHSL((random() - 0.5) * 0.03, (random() - 0.5) * 0.12, (random() - 0.5) * 0.16);
-        mesh.setColorAt(placed, color);
+        colors.push(color.clone());
+
         if (name === 'grass') {
           const cell = this._indexAt(x, z);
           if (this.foliageMask[cell] < 3) this.foliageMask[cell] += 1;
@@ -1780,11 +2009,26 @@ export class TerrainSystem {
         placed += 1;
       }
 
-      mesh.count = placed;
-      mesh.instanceMatrix.needsUpdate = true;
-      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-      mesh.computeBoundingSphere();
-      this.group.add(mesh);
+      // Chunked rather than one 2 km instanced mesh: the near chunks draw, the
+      // rest cost nothing at all.
+      const reach = LAYER_REACH[name] ?? 0.3;
+      const group = this._chunkify({
+        name: `Foliage_${name}`,
+        sources: [{
+          geometry,
+          material,
+          matrices,
+          colors,
+          castShadow: name !== 'grass',
+          receiveShadow: false,
+        }],
+        nearScale: reach,
+        maxScale: reach,
+      });
+
+      for (const chunk of group.chunks) {
+        for (const mesh of chunk.meshes) this._foliageMeshes.push(mesh);
+      }
       return placed;
     };
 
@@ -1910,8 +2154,7 @@ export class TerrainSystem {
 
     // Pushable stones follow their rigid body, so a shoved boulder rolls away
     // visually instead of sliding through the meadow like a ghost.
-    if (this.boulderBodies.length && this.props) {
-      const mesh = this.props.boulderMesh;
+    if (this.boulderBodies.length) {
       for (let i = 0; i < this.boulderBodies.length; i += 1) {
         const entry = this.boulderBodies[i];
         const p = entry.body.position;
@@ -1920,9 +2163,17 @@ export class TerrainSystem {
         this._bq.set(q.x, q.y, q.z, q.w);
         this._bs.set(entry.radius, entry.radius * entry.squash, entry.radius);
         this._bm.compose(this._bp, this._bq, this._bs);
-        mesh.setMatrixAt(entry.index, this._bm);
+        // A stone is drawn twice (full mesh up close, tetrahedron far away), so
+        // both copies have to follow the body.
+        if (entry.near) {
+          entry.near.mesh.setMatrixAt(entry.near.index, this._bm);
+          entry.near.mesh.instanceMatrix.needsUpdate = true;
+        }
+        if (entry.far) {
+          entry.far.mesh.setMatrixAt(entry.far.index, this._bm);
+          entry.far.mesh.instanceMatrix.needsUpdate = true;
+        }
       }
-      mesh.instanceMatrix.needsUpdate = true;
     }
     const slots = this.windUniforms.uTruckPos.value;
     for (let i = 0; i < slots.length; i += 1) {
@@ -1945,18 +2196,26 @@ export class TerrainSystem {
       const max = mesh.userData.maxInstances || mesh.count;
       const count = Math.floor(max * d);
       mesh.count = count;
+      mesh.userData.active = count > 0;
       mesh.visible = count > 0;
     }
 
-    const keep = Math.floor(this.stats.trees * d);
-    if (this.props) {
-      this.props.trunkMesh.count = keep;
-      this.props.pineMesh.count = keep;
-      this.props.trunkMesh.visible = keep > 0;
-      this.props.pineMesh.visible = keep > 0;
+    // Trees thin out per chunk, and each hidden instance takes its collider
+    // with it, so nobody can drive into a trunk that is not being drawn.
+    const activeTree = new Uint8Array(this.stats.trees);
+    for (const chunk of this.treeChunks?.chunks || []) {
+      const n = chunk.indices.length;
+      const keep = Math.floor(n * d);
+      for (const mesh of chunk.meshes) {
+        mesh.count = keep;
+        mesh.userData.active = keep > 0;
+      }
+      for (const mesh of chunk.farMeshes) mesh.count = keep;
+      for (let k = 0; k < keep; k += 1) activeTree[chunk.indices[k]] = 1;
     }
+
     for (let i = 0; i < this.treeColliders.length; i += 1) {
-      const active = i < keep;
+      const active = i < activeTree.length ? activeTree[i] === 1 : true;
       const body = this.treeColliders[i];
       if (body.collisionResponse !== active) {
         body.collisionResponse = active;
