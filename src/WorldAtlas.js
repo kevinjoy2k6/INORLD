@@ -226,23 +226,14 @@ export const ROADS = [
     id: 'ridge-traverse',
     name: 'High Traverse',
     kind: 'trail',
+    // A circuit on the meadow's rolling north shoulder. The old line climbed the
+    // peak's flank, then crossed the canyon's 7 m benches, and had to link to a
+    // road it could not reach at a climbable grade; a loop needs no link, has no
+    // dead end, and stays off the terraces.
     width: 3.1,
     points: [
-      [-300, 148], [-244, 168], [-196, 148], [-156, 178], [-108, 158],
-      [-60, 186], [-8, 164], [40, 196], [92, 172], [140, 204],
-      [192, 178], [244, 206], [296, 176],
-    ],
-  },
-  {
-    id: 'river-run',
-    name: 'River Run',
-    kind: 'trail',
-    width: 3.4,
-    points: [
-      [296, -244], [252, -232], [214, -252], [178, -236], [140, -258],
-      [104, -238], [66, -262], [28, -240], [-12, -262], [-52, -238],
-      [-92, -260], [-132, -236], [-172, -258], [-212, -232], [-252, -254],
-      [-292, -230],
+      [-300, 40], [-262, 92], [-218, 120], [-170, 108], [-138, 68],
+      [-178, 28], [-248, 16], [-300, 40],
     ],
   },
 ];

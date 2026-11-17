@@ -108,6 +108,7 @@ export function fbm(noise, x, y, octaves = 4, lacunarity = 2.03, gain = 0.5) {
 }
 
 const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
+const clampNumber = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 const lerp = (a, b, t) => a + (b - a) * t;
 
 function smoothstep(edge0, edge1, x) {
@@ -316,6 +317,28 @@ const WATER_LEVEL = 1.1;
 // Deepest water is WATER_LEVEL - RIVER_BED: 0.95 m, past a stock intake (0.8 m)
 // and comfortably inside a snorkel's 1.8 m.
 const RIVER_BED = 0.15;
+// A graded trail sits this far above the water at its deepest crossing, so a
+// ford runs 0.25 m deep instead of inheriting the 0.95 m riverbed that drowns
+// a stock intake.
+const FORD_FLOOR = WATER_LEVEL - 0.25;
+// Steepest leg a trail may have, as a tangent. The truck's 1.9 t on 0.9-grip
+// tyres pulls about 7.4 kN, so it climbs to roughly 21 degrees and stalls
+// beyond it, and the engine can only just hold 18. 0.2 is 11.3 degrees: after
+// the couple of degrees the surface gains where a trail blends into a steeper
+// road at a junction it stays around 15, which leaves the truck real margin.
+const TRAIL_MAX_GRADE = 0.2;
+
+// Nearby tracks blend their grades over this radius; path bounds have to reach
+// as far, or a path just outside another's box cannot contribute. It is wide on
+// purpose: where two tracks cross at different heights the blend turns the
+// difference into a ramp spread over twice this distance instead of a step.
+const PATH_BLEND_RADIUS = 16;
+// Waypoint spacing after resampling: fine enough that the corridor follows the
+// authored line, coarse enough that the nearest-path pass stays quick.
+const PATH_SPACING = 40;
+
+/** The trails with no signpost and no services: the three local lines. */
+const UNMARKED_TRAILS = new Set(['quarry-switchbacks', 'ridge-traverse', 'river-run']);
 
 export class TerrainSystem {
   constructor({ scene, world, seed = 20261113, groundMaterial, testMode = false }) {
@@ -447,12 +470,34 @@ export class TerrainSystem {
     // like everything else, so they have to be stretched with the world —
     // otherwise they stay a tiny ring in the middle of a 2 km map.
     const scalePath = (path) => path.map(([x, z]) => [x * WORLD_SCALE, z * WORLD_SCALE]);
+    this.pathNames = ['valley-loop', 'meadow-spur'];
     const paths = [scalePath(loop), scalePath(spur)];
     for (const road of ROADS) {
       paths.push(road.points);
       this.pathWidths.push(road.width);
+      this.pathNames.push(road.id);
     }
-    this.roadPaths = ROADS;
+
+    // River Run follows the river's own meander at a fixed offset on the north
+    // bank. Authored as a straight line in the atlas it spent its length in up
+    // to 3.5 m of water; the bank is dry and still hugs the river.
+    const bank = [];
+    for (let x = -this.halfSize + 90; x <= this.halfSize - 90; x += 60) {
+      bank.push([x, clampNumber(this.riverZ(x) + 55, -this.halfSize + 70, this.halfSize - 70)]);
+    }
+    paths.push(bank);
+    this.pathWidths.push(3.4);
+    this.pathNames.push('river-run');
+
+    // The unmarked trails must join the network rather than stop in a field.
+    for (let i = 0; i < paths.length; i += 1) {
+      if (UNMARKED_TRAILS.has(this.pathNames[i])) paths[i] = this._linkEnds(paths[i], paths);
+    }
+
+    // Resample to a workable spacing. Atlas waypoints are up to 158 m apart, so
+    // a junction fell in the middle of a straight leg where neither track had a
+    // waypoint and the two grades could not be made to agree there.
+    for (let i = 0; i < paths.length; i += 1) paths[i] = this._resample(paths[i], PATH_SPACING);
 
     // Per-path bounding box, used to skip paths that cannot possibly be the
     // nearest. With eleven paths over 174k grid points this is the difference
@@ -465,11 +510,194 @@ export class TerrainSystem {
         if (z < minZ) minZ = z;
         if (z > maxZ) maxZ = z;
       }
-      const margin = (this.pathWidths[index] ?? 3) + 8;
+      const margin = (this.pathWidths[index] ?? 3) + PATH_BLEND_RADIUS;
       return { minX: minX - margin, maxX: maxX + margin, minZ: minZ - margin, maxZ: maxZ + margin };
     });
 
     return paths;
+  }
+
+  /** Densify a polyline to at most `maxSpacing` metres between waypoints. */
+  _resample(points, maxSpacing) {
+    const out = [points[0]];
+    for (let i = 1; i < points.length; i += 1) {
+      const [x0, z0] = points[i - 1];
+      const [x1, z1] = points[i];
+      const steps = Math.max(1, Math.ceil(Math.hypot(x1 - x0, z1 - z0) / maxSpacing));
+      for (let s = 1; s <= steps; s += 1) {
+        out.push([x0 + ((x1 - x0) * s) / steps, z0 + ((z1 - z0) * s) / steps]);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Extend a trail's ends to the nearest point on any other track when they are
+   * otherwise stranded. A trail that stops in open country is a dead end: you
+   * have to turn around, which is not why anyone takes one.
+   */
+  _linkEnds(points, allPaths) {
+    const nearestOnOtherPaths = (px, pz) => {
+      let best = null;
+      for (const path of allPaths) {
+        if (path === points) continue;
+        for (const [x, z] of path) {
+          const d = Math.hypot(x - px, z - pz);
+          if (!best || d < best.d) best = { d, x, z };
+        }
+      }
+      return best;
+    };
+
+    // A closed circuit already ends where it starts; there is nothing to link.
+    const first = points[0];
+    const last = points[points.length - 1];
+    if (Math.hypot(first[0] - last[0], first[1] - last[1]) < 1) return points;
+
+    const out = points.slice();
+    const head = nearestOnOtherPaths(out[0][0], out[0][1]);
+    if (head && head.d > 40) out.unshift([head.x, head.z]);
+    const tail = nearestOnOtherPaths(out[out.length - 1][0], out[out.length - 1][1]);
+    if (tail && tail.d > 40) out.push([tail.x, tail.z]);
+    return out;
+  }
+
+  /**
+   * Round the vertical profile: a moving average over waypoint heights, which
+   * turns a crease between a climb and a drop into a curve the truck can drive
+   * over instead of beaching on.
+   */
+  _smoothTrailProfile(path, heights, pinned = null) {
+    const source = heights.slice();
+    for (let i = 1; i < heights.length - 1; i += 1) {
+      if (pinned && pinned[i] !== null && pinned[i] !== undefined) continue;
+      heights[i] = (source[i - 1] + source[i] * 2 + source[i + 1]) / 4;
+    }
+  }
+
+  /**
+   * Where a trail's end lands on another track, both are pinned to one height.
+   * The link leg is otherwise graded to its own ends, and meeting a road that
+   * is already at another height leaves a step right where the trail starts.
+   */
+  _pinSharedEnds() {
+    const paths = this.trailPoints;
+    const heights = this.trailHeights;
+    const pins = this.trailPins;
+
+    for (let p = 0; p < paths.length; p += 1) {
+      for (const end of [0, paths[p].length - 1]) {
+        const [x, z] = paths[p][end];
+        for (let q = 0; q < paths.length; q += 1) {
+          if (q === p) continue;
+          for (let k = 0; k < paths[q].length; k += 1) {
+            const apart = Math.hypot(paths[q][k][0] - x, paths[q][k][1] - z);
+            if (apart > 1) continue;
+            // Only worth pinning when the trail can actually arrive there: a pin
+            // it cannot reach inside the grade limit is a step at the very end.
+            const previous = end === 0 ? 1 : paths[p].length - 2;
+            const run = Math.hypot(paths[p][previous][0] - x, paths[p][previous][1] - z);
+            if (Math.abs(heights[p][end] - heights[q][k]) > run * TRAIL_MAX_GRADE) continue;
+            const h = (heights[p][end] + heights[q][k]) / 2;
+            heights[p][end] = h;
+            pins[p][end] = h;
+            heights[q][k] = h;
+            pins[q][k] = h;
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Put a waypoint on both tracks at every place they cross, at one shared
+   * height, and pin it. Two independently graded lines cannot agree in the
+   * middle of a leg without this, and the difference becomes a wall where the
+   * trail crosses a road that is climbing.
+   */
+  _stitchCrossings() {
+    const paths = this.trailPoints;
+    const heights = this.trailHeights;
+    const pins = this.trailPins;
+    const inserts = paths.map(() => []);
+
+    for (let p = 0; p < paths.length; p += 1) {
+      for (let q = p + 1; q < paths.length; q += 1) {
+        for (let i = 1; i < paths[p].length; i += 1) {
+          const [ax, az] = paths[p][i - 1];
+          const [bx, bz] = paths[p][i];
+          const rx = bx - ax;
+          const rz = bz - az;
+          for (let k = 1; k < paths[q].length; k += 1) {
+            const [cx, cz] = paths[q][k - 1];
+            const [dx, dz] = paths[q][k];
+            const sx = dx - cx;
+            const sz = dz - cz;
+            const denom = rx * sz - rz * sx;
+            if (Math.abs(denom) < 1e-9) continue;
+            const t = ((cx - ax) * sz - (cz - az) * sx) / denom;
+            const u = ((cx - ax) * rz - (cz - az) * rx) / denom;
+            // Endpoints are already shared waypoints; only interior crossings need one.
+            if (t < 0.02 || t > 0.98 || u < 0.02 || u > 0.98) continue;
+
+            const h = (lerp(heights[p][i - 1], heights[p][i], t)
+              + lerp(heights[q][k - 1], heights[q][k], u)) / 2;
+            const x = ax + rx * t;
+            const z = az + rz * t;
+            inserts[p].push({ i, x, z, h });
+            inserts[q].push({ i: k, x, z, h });
+          }
+        }
+      }
+    }
+
+    for (let p = 0; p < paths.length; p += 1) {
+      const list = inserts[p].sort((a, b) => b.i - a.i);
+      for (const insert of list) {
+        paths[p].splice(insert.i, 0, [insert.x, insert.z]);
+        heights[p].splice(insert.i, 0, insert.h);
+        pins[p].splice(insert.i, 0, insert.h);
+      }
+    }
+  }
+
+  /**
+   * Limit a trail's own grade so that no leg becomes a wall. The corridor is
+   * graded to these heights, which is what decides how steep the drive is; the
+   * atlas waypoints follow raw terrain, including 65 degree cone flanks and the
+   * canyon's 7 m benches.
+   */
+  _limitTrailGrade(path, heights, pinned = null) {
+    const stepAt = (i) => {
+      const d = Math.hypot(path[i][0] - path[i - 1][0], path[i][1] - path[i - 1][1]);
+      return d * TRAIL_MAX_GRADE;
+    };
+    // Junction heights are fixed points the grade has to arrive at rather than
+    // slide past, so a pinned waypoint is never moved; its neighbours are
+    // relaxed toward it instead. Sweeping both ways a few times is enough for
+    // every leg to end up within the limit reachable from its nearest pin.
+    const isPinned = (i) => pinned !== null && pinned[i] !== null && pinned[i] !== undefined;
+    // A circuit closes on itself, so its two ends are the same waypoint: they
+    // have to hold one height, or the leg that joins them is never graded and
+    // the loop has a wall at the seam.
+    const n = heights.length;
+    const closed = n > 2
+      && Math.hypot(path[0][0] - path[n - 1][0], path[0][1] - path[n - 1][1]) < 1;
+    if (closed) heights[n - 1] = heights[0];
+
+    for (let sweep = 0; sweep < 3; sweep += 1) {
+      if (closed) heights[n - 1] = heights[0];
+      for (let i = 1; i < heights.length; i += 1) {
+        if (isPinned(i)) continue;
+        const step = stepAt(i);
+        heights[i] = clampNumber(heights[i], heights[i - 1] - step, heights[i - 1] + step);
+      }
+      for (let i = heights.length - 2; i >= 0; i -= 1) {
+        if (isPinned(i)) continue;
+        const step = stepAt(i + 1);
+        heights[i] = clampNumber(heights[i], heights[i + 1] - step, heights[i + 1] + step);
+      }
+    }
   }
 
   riverZ(x) {
@@ -532,38 +760,6 @@ export class TerrainSystem {
     return h;
   }
 
-  _trailDistanceAndHeight(x, z) {
-    if (!this.trailHeights) return { distance: Infinity, height: 0, width: 3 };
-    const widths = this.pathWidths || [];
-    let best = null;
-    const bounds = this.pathBounds;
-    for (let p = 0; p < this.trailPoints.length; p += 1) {
-      const box = bounds && bounds[p];
-      if (box && (x < box.minX || x > box.maxX || z < box.minZ || z > box.maxZ)) continue;
-      const path = this.trailPoints[p];
-      const heights = this.trailHeights[p];
-      for (let i = 1; i < path.length; i += 1) {
-        const [x0, z0] = path[i - 1];
-        const [x1, z1] = path[i];
-        const dx = x1 - x0;
-        const dz = z1 - z0;
-        const lengthSq = dx * dx + dz * dz;
-        if (lengthSq < 1e-6) continue;
-        let t = ((x - x0) * dx + (z - z0) * dz) / lengthSq;
-        t = t < 0 ? 0 : t > 1 ? 1 : t;
-        const distance = Math.hypot(x - (x0 + dx * t), z - (z0 + dz * t));
-        if (!best || distance < best.distance) {
-          best = {
-            distance,
-            height: lerp(heights[i - 1], heights[i], t),
-            width: widths[p] ?? 3,
-          };
-        }
-      }
-    }
-    return best || { distance: Infinity, height: 0, width: 3 };
-  }
-
   /** Base terrain + the region's own character (meadow rolls, canyon steps). */
   _shapedHeight(x, z) {
     let h = this._baseHeight(x, z);
@@ -576,10 +772,29 @@ export class TerrainSystem {
   }
 
   async _generateHeightGrid() {
-    // Sample every waypoint so the trail can be flattened to its own grade.
+    // Sample every waypoint so the trail can be flattened to its own grade,
+    // with fords kept shallow and every leg climbable.
     this.trailHeights = this.trailPoints.map((path) =>
-      path.map(([x, z]) => this._shapedHeight(x, z)),
+      path.map(([x, z]) => Math.max(this._shapedHeight(x, z), FORD_FLOOR)),
     );
+    // Every leg climbable, then pinned where tracks cross, then graded again to
+    // meet those pins: the corridor is graded to these heights, so this is what
+    // decides how steep the drive is.
+    this.trailPins = this.trailPoints.map((path) => path.map(() => null));
+    const limitAll = () => this.trailPoints.forEach((path, index) =>
+      this._limitTrailGrade(path, this.trailHeights[index], this.trailPins[index]));
+    limitAll();
+    this._stitchCrossings();
+    this._pinSharedEnds();
+    limitAll();
+    // Grade alone leaves creases: a crest that turns from a climb straight into
+    // a drop is where a 2.8 m wheelbase beaches itself, so the profile is
+    // rounded and graded again.
+    for (let pass = 0; pass < 2; pass += 1) {
+      this.trailPoints.forEach((path, index) =>
+        this._smoothTrailProfile(path, this.trailHeights[index], this.trailPins[index]));
+      limitAll();
+    }
 
     if (this.testMode) {
       this.provingDatum = resolveDatum((x, z) => this._baseHeight(x, z));
@@ -603,17 +818,25 @@ export class TerrainSystem {
         // trails so they read as graded carriageway rather than a footpath.
         const trail = this._trailFieldAt(x, z);
         const corridor = trail.width + 5;
+        let trailWeight = 0;
         if (trail.distance < corridor) {
-          const inner = trail.width * 0.6;
+          // The flat core is never narrower than one grid cell: a 3 m trail in a
+          // 5 m grid would otherwise have raw hillside bleeding into the
+          // centreline, which showed up as a 35 degree kink in the surface.
+          const inner = Math.max(trail.width * 0.6, ELEMENT * 0.6);
           const w = 1 - smoothstep(inner, corridor, trail.distance);
-          h = lerp(h, trail.height, w * 0.95);
+          trailWeight = w * 0.98;
+          h = lerp(h, trail.height, trailWeight);
         }
 
-        // Carve the river last so it cuts through the trail at the ford.
+        // Carve the river last, but never through the graded trail itself: the
+        // carve used to run unopposed and dropped every ford back to the 0.95 m
+        // bed, past the depth a stock intake can breathe. Scaling it by the
+        // trail's own weight leaves a shallow crossing at the trail's grade.
         const riverDistance = Math.abs(z - this.riverZ(x));
         if (riverDistance < 34) {
           const w = 1 - smoothstep(4.5, 34, riverDistance);
-          h = lerp(h, RIVER_BED, w * w);
+          h = lerp(h, RIVER_BED, w * w * (1 - trailWeight));
         }
 
         if (this.testMode) {
@@ -642,6 +865,15 @@ export class TerrainSystem {
     const distance = new Float32Array(count);
     const height = new Float32Array(count);
     const width = new Float32Array(count);
+    // Where two tracks run within metres of each other — every junction, and
+    // the trails that share a shoulder with a road — taking the nearest one
+    // snapped the grade between them, which is a step of several metres across
+    // a few metres of track. Average the grades instead.
+    const BLEND_RADIUS = PATH_BLEND_RADIUS;
+    const paths = this.trailPoints;
+    const bounds = this.pathBounds;
+    const trailHeights = this.trailHeights;
+    const widths = this.pathWidths;
 
     for (let j = 0; j < VERTS; j += 1) {
       await this._yield();
@@ -650,10 +882,44 @@ export class TerrainSystem {
         const x = -this.halfSize + i * ELEMENT;
         const index = i * VERTS + j;
         // Direct search here: this IS the field being built.
-        const trail = this._trailDistanceAndHeight(x, z);
-        distance[index] = trail.distance === Infinity ? 1e9 : trail.distance;
-        height[index] = trail.height;
-        width[index] = trail.width;
+        let nearest = Infinity;
+        let nearestHeight = 0;
+        let nearestWidth = 3;
+        let heightSum = 0;
+        let weightSum = 0;
+
+        for (let p = 0; p < paths.length; p += 1) {
+          const box = bounds[p];
+          if (x < box.minX || x > box.maxX || z < box.minZ || z > box.maxZ) continue;
+          const path = paths[p];
+          const heights = trailHeights[p];
+          for (let k = 1; k < path.length; k += 1) {
+            const [x0, z0] = path[k - 1];
+            const [x1, z1] = path[k];
+            const dx = x1 - x0;
+            const dz = z1 - z0;
+            const lengthSq = dx * dx + dz * dz;
+            if (lengthSq < 1e-6) continue;
+            const t = clamp01(((x - x0) * dx + (z - z0) * dz) / lengthSq);
+            const d = Math.hypot(x - (x0 + dx * t), z - (z0 + dz * t));
+            if (d > BLEND_RADIUS && d >= nearest) continue;
+            const h = lerp(heights[k - 1], heights[k], t);
+            if (d < nearest) {
+              nearest = d;
+              nearestHeight = h;
+              nearestWidth = widths[p] ?? 3;
+            }
+            if (d < BLEND_RADIUS) {
+              const w = 1 / ((d + 2) * (d + 2));
+              heightSum += h * w;
+              weightSum += w;
+            }
+          }
+        }
+
+        distance[index] = nearest === Infinity ? 1e9 : nearest;
+        height[index] = weightSum > 0 ? heightSum / weightSum : nearestHeight;
+        width[index] = nearestWidth;
       }
     }
 
@@ -661,9 +927,9 @@ export class TerrainSystem {
   }
 
   /**
-   * Field lookup, same shape as _trailDistanceAndHeight. Returns a shared
-   * record: this runs a quarter of a million times per build, so allocating a
-   * fresh object each call is pure garbage. Read it where you get it.
+   * Field lookup: nearest-path distance, its blended grade height and width.
+   * Returns a shared record because this runs a quarter of a million times per
+   * build, so a fresh object per call is pure garbage. Read it where you get it.
    */
   _trailFieldAt(x, z) {
     // build() lays the field down before anything reads it, so no guard here.
