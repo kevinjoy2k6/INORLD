@@ -4,18 +4,24 @@ import * as CANNON from 'cannon-es';
 export const CAMERA_MODE = {
   CINEMATIC: 'cinematic',
   TACTICAL: 'tactical',
+  COCKPIT: 'cockpit',
 };
 
 export const CAMERA_MODE_LABEL = {
   cinematic: 'OVER THE HILL',
   tactical: 'SNOWRUNNER',
+  cockpit: 'INSIDE THE CAB',
 };
 
 /** Short forms that fit the HUD column. */
 export const CAMERA_MODE_SHORT = {
   cinematic: 'CINEMATIC',
   tactical: 'TACTICAL',
+  cockpit: 'CABIN',
 };
+
+/** Cycle order for the CAM button. */
+const CAMERA_MODE_ORDER = [CAMERA_MODE.CINEMATIC, CAMERA_MODE.TACTICAL, CAMERA_MODE.COCKPIT];
 
 export const FOCUS_MODE = {
   AUTO: 'auto',
@@ -133,9 +139,8 @@ export class CameraController {
   }
 
   toggleMode() {
-    return this.setMode(
-      this.mode === CAMERA_MODE.CINEMATIC ? CAMERA_MODE.TACTICAL : CAMERA_MODE.CINEMATIC,
-    );
+    const next = CAMERA_MODE_ORDER[(CAMERA_MODE_ORDER.indexOf(this.mode) + 1) % CAMERA_MODE_ORDER.length];
+    return this.setMode(next);
   }
 
   setFocus(focus) {
@@ -236,13 +241,21 @@ export class CameraController {
 
     this.transition = Math.max(0, this.transition - dt);
 
-    const desired = this.mode === CAMERA_MODE.CINEMATIC
-      ? this._cinematicPose(dt, forward)
-      : this._tacticalPose(dt);
+    const desired = this.mode === CAMERA_MODE.COCKPIT
+      ? this._cockpitPose(dt, forward)
+      : this.mode === CAMERA_MODE.CINEMATIC
+        ? this._cinematicPose(dt, forward)
+        : this._tacticalPose(dt);
 
     /* ---- damp the rendered pose toward the desired one ---- */
     let positionLambda = this.mode === CAMERA_MODE.CINEMATIC ? 5.2 : 9.5;
     let targetLambda = this.mode === CAMERA_MODE.CINEMATIC ? 7.5 : 12;
+    // In the cab the camera must not lag the chassis: a springy cockpit view
+    // reads as nausea, not weight.
+    if (this.mode === CAMERA_MODE.COCKPIT) {
+      positionLambda = 26;
+      targetLambda = 22;
+    }
     if (this.transition > 0) {
       // Softer while switching so the jump reads as a move, not a cut.
       positionLambda = 3.4;
@@ -260,7 +273,9 @@ export class CameraController {
       this.fov = damp(this.fov, desired.fov, 4, dt);
     }
 
-    this._avoidGround(this.mode === CAMERA_MODE.TACTICAL ? 0.75 : 1.3);
+    if (this.mode !== CAMERA_MODE.COCKPIT) {
+      this._avoidGround(this.mode === CAMERA_MODE.TACTICAL ? 0.75 : 1.3);
+    }
 
     this.camera.position.copy(this.position);
     this.camera.lookAt(this.target);
@@ -269,6 +284,41 @@ export class CameraController {
       this.camera.fov = this.fov;
       this.camera.updateProjectionMatrix();
     }
+  }
+
+  /**
+   * Driver's eye: inside the cab, ahead of the seat, looking down the trail.
+   * The eye rides the chassis, with a small amount of head shake from speed and
+   * steering so the view still feels attached to a moving vehicle.
+   */
+  _cockpitPose(dt, forward) {
+    const body = this.vehicle.body;
+    const group = this.vehicle.group;
+    const q = group ? group.quaternion : body.quaternion;
+    const base = group ? group.position : body.position;
+
+    // Head position in the chassis frame: left-hand drive, eye height above the
+    // floor, just behind the windscreen.
+    this._tmp.set(-0.36, 0.46, 0.12).applyQuaternion(q);
+    const position = this._desiredPos.set(base.x + this._tmp.x, base.y + this._tmp.y, base.z + this._tmp.z);
+
+    const speed = Math.hypot(body.velocity.x, body.velocity.z);
+    const shake = Math.min(1, speed / 22) * 0.012;
+    if (shake > 0) {
+      this._headPhase = (this._headPhase ?? 0) + dt * (6 + speed * 0.35);
+      position.y += Math.sin(this._headPhase) * shake;
+      position.x += Math.cos(this._headPhase * 0.7) * shake * 0.6;
+    }
+
+    // Look down the trail, with the steering angle pulling the view into the
+    // corner it is pointed at.
+    const steer = this.vehicle.steerInput ?? 0;
+    const target = this._desiredTarget.copy(position).addScaledVector(forward, 26);
+    target.x += forward.z * steer * 6;
+    target.z -= forward.x * steer * 6;
+    target.y -= 1.6;
+
+    return { position, target, fov: 68 };
   }
 
   _cinematicPose(dt, forward) {

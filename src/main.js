@@ -12,7 +12,7 @@ import { MissionManager } from './MissionManager.js';
 import { UIManager } from './UIManager.js';
 import { AtmosphereAndPostFX } from './AtmosphereAndPostFX.js';
 import { TactileVFX } from './TactileVFX.js';
-import { ProceduralAudio } from './ProceduralAudio.js';
+import { VehicleAudioController } from './audio/VehicleAudioController.js';
 import { PerformanceOptimizer, loadStoredSettings } from './PerformanceOptimizer.js';
 import { GraphicsSettingsUI } from './GraphicsSettingsUI.js';
 import { ExpeditionHUD } from './ExpeditionHUD.js';
@@ -496,12 +496,38 @@ const tactile = new TactileVFX({ scene, vehicle, trailer, terrain, quality });
 const provingBench = TEST_MODE ? createProvingBench({ vehicle, terrain }) : null;
 const provingHud = TEST_MODE ? createProvingHud({ bench: provingBench, vehicle }) : null;
 
-const audio = new ProceduralAudio({
+// Layered vehicle audio: engine, exhaust, drivetrain, tyres, suspension,
+// collisions, interior mix and the valley around them. Each layer is its own
+// module; this controller is the only place they are wired to the physics.
+const audio = new VehicleAudioController({
   vehicle,
-  winchSystem,
+  terrain,
   camera,
-  quality,
+  atmosphere,
+  winchSystem,
 });
+
+// Exposed for the audio lab and for console tuning. Read-only by convention.
+window.__game = { audio, vehicle, cameraController, terrain, atmosphere };
+
+// ?audiolab runs the scripted test drive once the mixer is unlocked.
+const audioLabEnabled = new URLSearchParams(window.location.search).has('audiolab');
+let audioLab = null;
+function tickAudioLab(dt) {
+  if (!audioLabEnabled) return;
+  if (!audioLab) {
+    if (!audio.ready) return;
+    import('./audio/AudioLab.js')
+      .then(({ AudioLab }) => {
+        audioLab = new AudioLab({ audio, vehicle, cameraController, terrain });
+        window.__audioLab = audioLab;
+        audioLab.start();
+      })
+      .catch(() => {});
+    return;
+  }
+  audioLab.update(dt);
+}
 
 quality.onChange(() => atmosphere.setQuality(quality.settings));
 
@@ -982,7 +1008,7 @@ function updateHud(dt) {
   hud.lights.classList.toggle('on', telemetry.headlights);
 
   if (hud.camera) hud.camera.textContent = cameraController.modeShort;
-  if (hud.cameraBtn) hud.cameraBtn.classList.toggle('on', cameraController.mode === 'tactical');
+  if (hud.cameraBtn) hud.cameraBtn.classList.toggle('on', cameraController.mode !== 'cinematic');
   if (hud.focusBtn) hud.focusBtn.classList.toggle('on', cameraController.focus !== 'auto');
 
   for (const button of hud.accessoryButtons) {
@@ -1171,6 +1197,16 @@ function readDriverInput(dt) {
   const rate = Math.abs(target) > 0.01 ? 9 * sensitivity : 11 * centering;
   steerValue += (target - steerValue) * Math.min(1, rate * Math.max(0.001, dt));
 
+  // The audio lab drives the truck during its scripted phases; it is the only
+  // thing allowed to take the wheel from the player, and only when it is running.
+  const override = window.__audioLabInput;
+  if (override) {
+    vehicle.setThrottle(override.throttle || 0);
+    vehicle.setBrake(override.brake || 0);
+    vehicle.setSteer(override.steer || 0);
+    return;
+  }
+
   vehicle.setThrottle(throttle);
   vehicle.setBrake(brake);
   vehicle.setSteer(Math.max(-1, Math.min(1, steerValue * sensitivity)));
@@ -1259,6 +1295,16 @@ function frame(now) {
     provingBench.update(dt);
     provingHud.update(dt);
   }
+  // Perspective follows the camera, weather follows the sky, so the mix reacts
+  // to where you are rather than to a setting buried in a menu.
+  audio.setCameraMode(cameraController.mode);
+  audio.setWeather(
+    atmosphere.weatherMode === 'snow'
+      ? 'snow'
+      : atmosphere.phase && atmosphere.phase.weather === 'rain'
+        ? 'rain'
+        : 'clear',
+  );
   audio.update(dt, telemetry, {
     // Analog pedal first, keyboard as the fallback, so the diesel revs with
     // however far you actually pushed it.
@@ -1266,8 +1312,10 @@ function frame(now) {
       keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0,
       held.throttleAxis || 0,
     ),
+    brake: Math.max(keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0, held.brakeAxis || 0),
     terrain,
   });
+  tickAudioLab(dt);
 
   // Wind-bent foliage: our truck plus every teammate shoves the grass aside.
   foliageTrucks.length = 0;

@@ -1,0 +1,28 @@
+{
+  "sampleRate": 48000,
+  "bitsPerSample": 24,
+  "loops": {},
+  "sets": {},
+  "catalogue": {
+    "loops": {
+      "engine.idle": "engine at a warm idle, ~600-750 rpm, looping, no other noise",
+      "engine.low": "engine pulling at ~1200-1800 rpm, exhaust closed, load on",
+      "engine.mid": "engine working at ~2000-2800 rpm, intake audible",
+      "engine.high": "engine at ~3200 rpm and up, hard and thin",
+      "tyre.asphalt": "rolling tyre on sealed road at ~40 km/h",
+      "tyre.gravel": "rolling tyre on loose gravel",
+      "tyre.dirt": "rolling tyre on packed dirt",
+      "tyre.mud": "tyre in deep mud, no standing water",
+      "tyre.wetmud": "tyre in mud with standing water",
+      "tyre.grass": "tyre rolling through grass",
+      "tyre.snow": "tyre rolling through fresh snow",
+      "tyre.ice": "tyre slipping on ice, almost no body",
+      "tyre.rocks": "tyre clattering over loose rock",
+      "tyre.water": "tyre fording shallow water"
+    },
+    "sets": {
+      "impact.body": "4-8 chassis impacts at different strengths, 0.3-1.0 s each",
+      "impact.tick": "4-8 small knocks: rocks, branches, bumper taps"
+    }
+  }
+}

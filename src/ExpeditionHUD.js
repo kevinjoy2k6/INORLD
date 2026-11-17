@@ -769,7 +769,8 @@ export class ExpeditionHUD {
     refs.fpsBox.classList.toggle('warn', meter.health === 'warn');
     refs.fpsBox.classList.toggle('bad', meter.health === 'bad');
     if (this.refs.cameraBtn) {
-      this.refs.cameraBtn.textContent = this.cameraController.mode === 'tactical' ? 'ORBIT' : 'VISTA';
+      this.refs.cameraBtn.textContent =
+        this.cameraController.mode === 'tactical' ? 'ORBIT' : this.cameraController.mode === 'cockpit' ? 'CABIN' : 'VISTA';
     }
     refs.lightsBtn.classList.toggle('on', !!this.atmosphere.headlightsOn);
     refs.photoBtn.classList.toggle('on', !!this.atmosphere.photo.active);
