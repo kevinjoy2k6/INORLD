@@ -1415,6 +1415,8 @@ const governor = {
   // see; 1.5 keeps text and the truck crisp while cutting fill by 44% on a
   // 2x display.
   cap: Math.min(window.devicePixelRatio || 1, 1.5),
+  strikes: 0,
+  degrade: 0,
   current: Math.min(window.devicePixelRatio || 1, 1.5),
   accumulator: 0,
   frames: 0,
@@ -1460,6 +1462,29 @@ function fpsGovernor(dt) {
     governor.current = next;
     renderer.setPixelRatio(next);
     window.__fpsScale = +next.toFixed(2);
+  }
+
+  // Resolution alone cannot always reach the target on an integrated GPU, so
+  // once the floor is reached the expensive passes go in order of what costs
+  // the most frame time per unit of visible difference: bloom and the film
+  // grade first, then shadows. One-way on purpose — a machine that cannot hold
+  // 60 should not oscillate between 60 with no shadows and 40 with them.
+  if (governor.fps < 46) governor.strikes += 1;
+  else governor.strikes = Math.max(0, governor.strikes - 1);
+
+  // Only shed passes once resolution has already bottomed out: a machine that
+  // can reach 60 by dropping pixels should keep its shadows.
+  if (governor.strikes >= 4 && governor.degrade < 2 && governor.current <= 0.46) {
+    governor.strikes = 0;
+    governor.degrade += 1;
+    if (governor.degrade === 1 && typeof atmosphere.setPostProcessing === 'function') {
+      atmosphere.setPostProcessing(false);
+    } else if (governor.degrade === 2) {
+      renderer.shadowMap.enabled = false;
+      renderer.shadowMap.autoUpdate = false;
+      sun.castShadow = false;
+    }
+    window.__fpsDegrade = governor.degrade;
   }
 }
 
