@@ -371,6 +371,12 @@ export class TerrainSystem {
     this.winchAnchors = [];
     this.treeColliders = [];
     this.boulderBodies = [];
+    // Scenery colliders are streamed in and out of the physics world around the
+    // truck (see updateColliders).
+    this._propBodies = [];
+    this._colliderX = Infinity;
+    this._colliderZ = Infinity;
+    this._colliderRadius = 0;
     this.foliageMask = new Uint8Array(VERTS * VERTS);
     this._foliageMeshes = [];
     this.group = new THREE.Group();
@@ -1380,6 +1386,65 @@ export class TerrainSystem {
 
   /* ---------------- scatter ---------------- */
 
+  /**
+   * Register a prop's collider without putting it in the world yet.
+   *
+   * Every trunk, outcrop and marker post used to be a body for the whole
+   * session. That is two and a half thousand extra bodies, and the broadphase
+   * has to walk all of them on every single physics step — more than the rest
+   * of the simulation put together — even though a tree two hundred metres
+   * behind the truck can never be touched. updateColliders() swaps in the ones
+   * within reach instead.
+   */
+  _registerPropBody(body, x, z) {
+    this._propBodies.push({ body, x, z, inWorld: false });
+    return body;
+  }
+
+  /**
+   * Keep only the scenery colliders the truck can reach inside the physics
+   * world. Cheap to call every frame: it re-scans only after the truck has
+   * moved far enough for the answer to change.
+   */
+  updateColliders(x, z, radius = 95) {
+    const world = this.world;
+    if (!world || !this._propBodies.length) return;
+    const dx = x - this._colliderX;
+    const dz = z - this._colliderZ;
+    if (this._colliderRadius === radius && dx * dx + dz * dz < 100) return;
+    this._colliderX = x;
+    this._colliderZ = z;
+    this._colliderRadius = radius;
+
+    const radiusSq = radius * radius;
+    let live = 0;
+    for (const entry of this._propBodies) {
+      const ox = entry.x - x;
+      const oz = entry.z - z;
+      const near = ox * ox + oz * oz < radiusSq;
+      if (near === entry.inWorld) {
+        if (near) live += 1;
+        continue;
+      }
+      if (near) {
+        world.addBody(entry.body);
+        entry.body.aabbNeedsUpdate = true;
+        entry.body.updateAABB();
+        entry.inWorld = true;
+        live += 1;
+      } else {
+        // A stone shoved out of the bubble stops where it lies rather than
+        // tumbling on forever in a world that is no longer stepping it.
+        if (entry.body.mass > 0) entry.body.sleep();
+        world.removeBody(entry.body);
+        entry.inWorld = false;
+      }
+    }
+    // SAPBroadphase caches a sorted axis list, so tell it membership changed.
+    if (world.broadphase && 'dirty' in world.broadphase) world.broadphase.dirty = true;
+    this.colliderStats = { total: this._propBodies.length, live };
+  }
+
   _addAnchor(kind, position, radius, body, pullHeight) {
     const anchor = {
       id: this.winchAnchors.length,
@@ -1649,7 +1714,7 @@ export class TerrainSystem {
       body.userData = { surface: 'hardpack', tree: true };
       body.aabbNeedsUpdate = true;
       body.updateAABB();
-      this.world.addBody(body);
+      this._registerPropBody(body, x, z);
 
       this._addAnchor('tree', new THREE.Vector3(x, h, z), 0.45, body, 1.9);
       this.treeColliders.push(body);
@@ -1715,7 +1780,7 @@ export class TerrainSystem {
       body.userData = { surface: 'rock', boulder: true };
       body.aabbNeedsUpdate = true;
       body.updateAABB();
-      this.world.addBody(body);
+      this._registerPropBody(body, x, z);
 
       if (movable) {
         this.boulderBodies.push({ body, index: boulders, radius, squash });
@@ -1770,7 +1835,7 @@ export class TerrainSystem {
         body.userData = { surface: 'hardpack', pole: true };
         body.aabbNeedsUpdate = true;
         body.updateAABB();
-        this.world.addBody(body);
+        this._registerPropBody(body, x, z);
 
         this._addAnchor('pole', new THREE.Vector3(x, h, z), 0.3, body, 2.4);
         poles += 1;

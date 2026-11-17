@@ -1349,6 +1349,10 @@ function frame(now) {
   // Distance LOD for props and ground cover: chunks past the fog are not drawn,
   // and chunks past the near threshold fall back to a proxy.
   terrain.updateLOD(camera);
+  // Physics streams with the truck as well: only scenery colliders within reach
+  // are in the world, which takes the per-step broadphase cost from ~13 ms to
+  // under 2 ms.
+  terrain.updateColliders(vehicle.body.position.x, vehicle.body.position.z);
 
   // Host owns the clock — ship it to the squad a few times a minute.
   if (networkManager.isHost) {
@@ -1461,6 +1465,11 @@ function fpsGovernor(dt) {
   if (Math.abs(next - governor.current) > 0.01) {
     governor.current = next;
     renderer.setPixelRatio(next);
+    // The optimizer has an auto-scaler of its own. Keep its idea of the ratio in
+    // step or the two of them write different values into the renderer and the
+    // resolution visibly bounces between them.
+    optimizer.settings.pixelRatio = next;
+    optimizer.effectivePixelRatio = next;
     window.__fpsScale = +next.toFixed(2);
   }
 
@@ -1474,7 +1483,7 @@ function fpsGovernor(dt) {
 
   // Only shed passes once resolution has already bottomed out: a machine that
   // can reach 60 by dropping pixels should keep its shadows.
-  if (governor.strikes >= 4 && governor.degrade < 2 && governor.current <= 0.46) {
+  if (governor.strikes >= 4 && governor.degrade < 4 && governor.current <= 0.46) {
     governor.strikes = 0;
     governor.degrade += 1;
     if (governor.degrade === 1 && typeof atmosphere.setPostProcessing === 'function') {
@@ -1483,6 +1492,19 @@ function fpsGovernor(dt) {
       renderer.shadowMap.enabled = false;
       renderer.shadowMap.autoUpdate = false;
       sun.castShadow = false;
+    } else if (governor.degrade === 3) {
+      // Everything above is per-pixel. If the frame is still over budget the
+      // only thing left is how much world is drawn: pull the view in to the LOW
+      // preset's distance. Not persisted, so the player's own preset survives.
+      optimizer.applySettings(
+        { drawDistance: 170, foliageDensity: 0.25, particleBudget: 60 },
+        { persist: false, markCustom: false },
+      );
+    } else if (governor.degrade === 4) {
+      optimizer.applySettings(
+        { drawDistance: 120, foliageDensity: 0, particleBudget: 20 },
+        { persist: false, markCustom: false },
+      );
     }
     window.__fpsDegrade = governor.degrade;
   }
