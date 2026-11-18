@@ -142,6 +142,8 @@ a contract.
 | `MudRutShader.js` | 701 | `RutSystem`: GPU rut stamp map (HIGH/MEDIUM) or decal ribbons (LOW) |
 | `WaterSystem.js` | 239 | `WaterSystem`: mirror water, depth ramp, foam, throttled reflection |
 | `Landmarks.js` | 417 | `Landmarks`: poles, centre lines, signs, gas stations, DOM notices |
+| `LandmarkModels.js` | 505 | `createStoneMaterials`, `assemble`, `castleTower`, `castleGate`, `ruinedWall`, `ruinStump`, `cairnGeometries`, `waymarker` — modular low-poly stonework |
+| `PointsOfInterest.js` | 400 | `PointsOfInterest`: keeps on the watchtower sites, river gatehouse, ruin fields, trail cairns and signposts |
 | `MissionManager.js` | 611 | `MissionManager`: watchtower scouting, timber hauling, bridge reconstruction |
 | `WinchSystem.js` | 541 | `WinchSystem`: static anchors, truck-to-truck rescue, fuel transfer |
 | `NetworkManager.js` | 1180 | `STUN_SERVERS`, `MAX_PEERS`, `makeRoomCode`, `normaliseRoomCode`, `roomCodeToPeerId`, `isPeerIdValidForRoom`, `vehicleSnapshot`, `NetworkManager` |
@@ -220,6 +222,8 @@ All of this is top-level in `src/main.js`; the module uses top-level `await`.
     `y = getHeightAt + 1.3`. `rutSystem.attachVehicle(vehicle)`.
 16. **NetworkManager**, **WinchSystem**, rescue beacon group, **MissionManager**
     (`setup()`), then cross-wire `networkManager.winchSystem/missionManager`.
+    Immediately after `setToaster()`: **`new PointsOfInterest({ scene, terrain, missionManager })`**
+    (`window.__poi`), which dresses the mission zones in architecture.
 17. **CameraController**, input collections (`keys`, `held`), **UIManager**
     (`ui.setNetworkCallbacks()`), `toast()`.
 18. **AtmosphereAndPostFX** (`atmosphere.setQuality(...)`, `fogScale = 0.34`),
@@ -632,6 +636,36 @@ Instanced utility poles (one side of the road), dashed centre lines, canvas-draw
 junction signs, gas stations with refuel radii, pylons, and DOM `notice` text.
 `landmarks.update(dt, vehicle, night)` is called every frame and must stay cheap.
 
+### 9.5 Points of interest
+
+`PointsOfInterest` wraps the mission zones in architecture, so a watchtower is a
+place you can see from a ridge rather than a circle in the HUD.
+
+| Set | Placement | Count |
+| --- | --- | --- |
+| Castle keeps | one per `WATCHTOWERS` entry, replacing the timber lookout | 6 |
+| Gatehouse + curtain walls | 13–30 m back from `bridgeZone.pos` on dry ground | 1 + 2 |
+| Cairns | both shoulders of every `road.kind === 'trail'`, every 62 m | 132 |
+| Named signposts | trailhead of each trail; label from a shared canvas atlas | 5 |
+| Ruin fields | `RUIN_SITES`: knobbled wall, stub tower, fallen blocks | 3 |
+
+Rules that keep it cheap and safe:
+
+- **Bake once.** `_bake(group)` clones each mesh, applies `matrixWorld` and
+  buckets the geometry by material; `_flush()` merges each bucket. The whole
+  layer is **17 meshes / ~24.5k triangles**, of which 6 are the live embers.
+- **`userData.live`** marks a part whose material is animated elsewhere (the
+  beacon ember reuses `tw.beaconMat`), so it survives baking as its own mesh and
+  the mission's pulse still reaches it.
+- **Nothing here owns state.** `tw.group.visible = false` retires the old timber
+  lookout; `tw.keep` keeps a handle for tests. No colliders are added: these are
+  scenery, and the vehicle drives through the gate opening by geometry alone.
+- **Placement is water-aware.** `_dry(x, z)` rejects `waterGrid > 0` and any
+  ground below 1.4 m; if a site is wet it nudges outward (gate: 13→30 m, ruins:
+  ±36 m) instead of drowning.
+- Builders bake transforms into geometry and leave the group at the origin, so
+  `assemble()` can merge freely. Keep that convention when adding a model.
+
 ---
 
 ## 10. Vehicle physics and construction
@@ -1025,6 +1059,7 @@ frame, so read the stats after a render or via `captureRenderStats`.
 | `8394969` | **120 Hz frame budget**: display refresh probe, governor target/cap/floor rewrite, reversible quality ladder, high-refresh boot profile, shadow-cadence and recompile fixes, `viewCutoff` LOD clamp, PMREM gating |
 | `071c117` | audit fixes: unreachable timber key → `M`, truthful lobby legend, co-op failures no longer fatal (plus null-safe legacy net helpers), typing/menu input guards, WebGL context-loss message, audio context suspended with a hidden tab |
 | `f23f0a2` | gameplay: `MissionManager.nextObjective()` + HUD **NEXT** distance row, driver-assist prompts for rollover, being bogged and a dry tank |
+| `9eeb085` | landmarks: `LandmarkModels` + `PointsOfInterest` — castle keeps on the watchtower sites, gatehouse and curtain walls at the river crossing, three ruin fields, 132 trail cairns and named trailhead signposts; whole layer baked to 17 meshes / 24.5k triangles |
 
 Earlier work still in force: 150 m chunked props with distance LOD and far proxies,
 catenary wires removed, poles on one side only, shadow pass throttled, water mirror
