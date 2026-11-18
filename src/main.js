@@ -18,6 +18,7 @@ import { GraphicsSettingsUI } from './GraphicsSettingsUI.js';
 import { ExpeditionHUD } from './ExpeditionHUD.js';
 import { ACCESSORIES, ACCESSORY_ORDER, PAINT_COLORS, PAINT_ORDER } from './VehicleMeshBuilder.js';
 import { Landmarks } from './Landmarks.js';
+import { PointsOfInterest } from './PointsOfInterest.js';
 import { StyleDNA } from './StyleDNA.js';
 import { WaterSystem } from './WaterSystem.js';
 import { StyleOverhaul, applyStylePalette } from './StyleOverhaul.js';
@@ -472,6 +473,12 @@ const missionManager = new MissionManager({
 });
 missionManager.setup();
 missionManager.setToaster(toast);
+
+// Stone keeps on the watchtower sites, a gatehouse at the river approach, cairns
+// along every trail and three ruin fields. Built after the mission zones exist
+// because it wraps their abstracts in architecture.
+const pointsOfInterest = new PointsOfInterest({ scene, terrain, missionManager });
+window.__poi = pointsOfInterest;
 
 // Wire the cross-references so state-change notifications flow.
 networkManager.winchSystem = winchSystem;
@@ -1810,7 +1817,7 @@ window.__game = {
   atmosphere, tactile, audio,
   optimizer, settingsUI, expeditionHUD,
   test: provingBench, testHud: provingHud, provingGround: TEST_MODE ? PROVING_GROUND : null,
-  landmarks, styleDNA, regionAt, waterSystem, styleOverhaul, overlandStyle,
+  landmarks, pointsOfInterest, styleDNA, regionAt, waterSystem, styleOverhaul, overlandStyle,
 };
 
 /* ---- high-refresh frame profile ------------------------------------
