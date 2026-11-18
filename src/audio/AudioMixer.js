@@ -59,6 +59,22 @@ export class AudioMixer {
     this.trims = { engine: 1, drivetrain: 1, tyres: 1, mechanical: 1, ambience: 1, ui: 1 };
     this._unlockBound = false;
     this.onReady = null;
+
+    // Animation frames stop in a hidden tab but the WebAudio graph keeps
+    // running, so the engine drone used to play on with nobody driving. Park the
+    // context with the tab and bring it back on return; unlock() already resumes
+    // a suspended context, so this needs no extra state.
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', () => {
+        if (!this.ctx) return;
+        if (document.hidden) {
+          const pending = this.ctx.suspend?.();
+          if (pending && typeof pending.catch === 'function') pending.catch(() => {});
+        } else if (this.ready) {
+          this.unlock();
+        }
+      });
+    }
   }
 
   /** Autoplay policy: the context can only start from a gesture. */

@@ -183,6 +183,22 @@ renderer.shadowMap.autoUpdate = false;
 renderer.shadowMap.needsUpdate = true;
 app.appendChild(renderer.domElement);
 
+// A lost GPU context used to freeze the canvas with no explanation - on mobile
+// the tab is usually reclaimed rather than crashed. Say what happened instead
+// of showing a still image of the last frame forever; settings are persisted, so
+// a reload is always safe.
+renderer.domElement.addEventListener('webglcontextlost', (event) => {
+  event.preventDefault();
+  window.__contextLost = true;
+  showFatal(
+    'The graphics context was lost.',
+    'The GPU reset or the tab was reclaimed. Reload the page to continue — your settings and preset are saved.',
+  );
+});
+renderer.domElement.addEventListener('webglcontextrestored', () => {
+  window.__contextLost = false;
+});
+
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xa8bccd);
 scene.fog = new THREE.Fog(0xa8bccd, 40, 260);
@@ -389,7 +405,11 @@ const networkManager = new NetworkManager({
   missionManager: null, // wired after missionManager is created
 });
 networkManager.onToaster = toast;
-networkManager.onFatal = (message) => showFatal('Co-op connection error.', message);
+// A failed co-op connection is not a fatal game error. A strict NAT, a wrong
+// room code or a peer dropping must never end the solo drive the player is
+// already in, so this reports it, tears the dead session down and hands the
+// lobby back. Genuine engine faults still go through showFatal().
+networkManager.onFatal = (message) => handleCoopFailure(message);
 
 const winchSystem = new WinchSystem({
   vehicle,
@@ -703,6 +723,16 @@ const PREVENTED_KEYS = new Set([
 ]);
 
 window.addEventListener('keydown', (event) => {
+  // Never drive with the keys somebody is typing with. The room-code field and
+  // the settings' numeric inputs are form controls: WASD and the arrows inside
+  // them must edit text, not the truck, and Space must insert a space.
+  const typingIn = event.target;
+  if (
+    typingIn instanceof HTMLElement
+    && (typingIn.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(typingIn.tagName))
+  ) {
+    return;
+  }
   if (PREVENTED_KEYS.has(event.code)) event.preventDefault();
   if (event.repeat) return;
   keys.add(event.code);
@@ -779,7 +809,9 @@ window.addEventListener('keydown', (event) => {
       toast(result.message.toUpperCase());
       break;
     }
-    case 'KeyY':
+    case 'KeyM':
+      // Cargo, not lighting: `Y` is the lighting-preset cycle above, and two
+      // `case 'KeyY'` labels in one switch made this branch unreachable.
       if (trailer.toggleLoad()) toast('TIMBER LOADED');
       else toast('TIMBER UNLOADED');
       break;
@@ -1125,20 +1157,48 @@ const btnJoin = document.querySelector('[data-net="join"]');
 const btnLeave = document.querySelector('[data-net="leave"]');
 const joinGoBtn = document.querySelector('[data-net="join-go"]');
 
+// The Phase-5 co-op panel these helpers were written for is gone: the live
+// status lives in the ExpeditionHUD (#hud-net-state). The ids below can be
+// null, and a co-op error used to throw on `null.textContent` inside the error
+// path itself. Each helper is a no-op when its markup is absent.
 function setNetState(text, ok) {
+  if (!netState) return;
   netState.textContent = text;
   netState.classList.toggle('online', !!ok);
 }
 
 function showNetCode(code) {
+  if (!netCode) return;
   netCode.textContent = code || '—';
-  netCodeRow.style.display = code ? 'flex' : 'none';
+  if (netCodeRow) netCodeRow.style.display = code ? 'flex' : 'none';
 }
 
 function setJoinFormVisible(visible) {
-  netJoin.style.display = visible ? 'flex' : 'none';
-  joinCodeInput.style.display = visible ? '' : 'none';
-  joinHostIdInput.style.display = 'none';
+  if (netJoin) netJoin.style.display = visible ? 'flex' : 'none';
+  if (joinCodeInput) joinCodeInput.style.display = visible ? '' : 'none';
+  if (joinHostIdInput) joinHostIdInput.style.display = 'none';
+}
+
+/**
+ * Co-op failed: say so, drop the dead session and stay in the game. This is the
+ * handler behind NetworkManager.onFatal, which fires for a rejected room code or
+ * a blocked WebRTC handshake as well as for real faults. Treating those as fatal
+ * used to throw the player out of a solo drive they were already enjoying.
+ */
+function handleCoopFailure(message) {
+  const text = String(message || 'connection failed');
+  toast(`CO-OP: ${text.toUpperCase()}`);
+  try {
+    networkManager.disconnect();
+  } catch {
+    /* the session may already be gone */
+  }
+  btnHost?.classList.remove('on');
+  btnJoin?.classList.remove('on');
+  if (btnLeave) btnLeave.style.display = 'none';
+  setNetState('OFFLINE', false);
+  showNetCode(null);
+  setJoinFormVisible(false);
 }
 
 // When hosting, expose the peer id too so a friend can paste it as a fallback.
@@ -1241,6 +1301,12 @@ const foliageTrucks = [];
 
 let steerValue = 0;
 
+/** True when the focused element is a text/number field or similar. */
+function isFormControl(element) {
+  if (!element || element === document.body) return false;
+  return element.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(element.tagName || '');
+}
+
 /**
  * Phase 8 input shaping: keyboard, arrow pads and the analog touch channels all
  * funnel into one steering value, so sensitivity and self-centering apply
@@ -1264,6 +1330,18 @@ function readDriverInput(dt) {
   const centering = optimizer.settings.steerCentering;
   const rate = Math.abs(target) > 0.01 ? 9 * sensitivity : 11 * centering;
   steerValue += (target - steerValue) * Math.min(1, rate * Math.max(0.001, dt));
+
+  // A menu owns the controls while it is open. Without this, adjusting a slider
+  // in the settings drawer with the arrow keys also steered and accelerated the
+  // truck behind it, and a held key stayed held after the drawer closed.
+  if (settingsUI.isOpen || isFormControl(document.activeElement)) {
+    keys.clear();
+    steerValue += (0 - steerValue) * Math.min(1, 11 * Math.max(0.001, dt));
+    vehicle.setThrottle(0);
+    vehicle.setBrake(0);
+    vehicle.setSteer(Math.max(-1, Math.min(1, steerValue)));
+    return;
+  }
 
   // The audio lab drives the truck during its scripted phases; it is the only
   // thing allowed to take the wheel from the player, and only when it is running.
