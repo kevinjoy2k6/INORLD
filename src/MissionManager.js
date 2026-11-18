@@ -380,6 +380,44 @@ export class MissionManager {
    *  per-frame checks
    * ================================================================== */
 
+  /**
+   * What the player should do next, as one place both the HUD and the squad can
+   * agree on. A 2 km valley with no minimap needs a direction, not just a
+   * counter: the trailer comes first when loaded, then the nearest unscouted
+   * tower, then the next load.
+   */
+  nextObjective(position = null) {
+    const p = position || this.vehicle.body.position;
+    const nearest = (zones, keep) => {
+      let best = null;
+      let bestDistance = Infinity;
+      for (const zone of zones) {
+        if (!zone || (keep && !keep(zone))) continue;
+        const distance = Math.hypot(zone.pos.x - p.x, zone.pos.z - p.z);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          best = zone;
+        }
+      }
+      return best ? { zone: best, distance: bestDistance } : null;
+    };
+
+    if (this.bundlesInTrailer > 0 && !this.bridgeBuilt) {
+      const drop = nearest([this.bridgeZone]);
+      if (drop) return { kind: 'deliver', label: 'BRIDGE', ...drop };
+    }
+
+    const tower = nearest(this.watchtowers, (tw) => !this.discovered.has(tw.id));
+    if (tower) return { kind: 'scout', label: 'TOWER', ...tower };
+
+    if (this.bundlesDelivered < BUNDLES_NEEDED && !this.bridgeBuilt) {
+      const load = nearest([this.millZone]);
+      if (load) return { kind: 'load', label: 'MILL', ...load };
+    }
+
+    return null;
+  }
+
   update(dt, now = 0) {
     const v = this.vehicle.body.position;
 

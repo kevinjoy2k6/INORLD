@@ -111,6 +111,7 @@ export class ExpeditionHUD {
           <div class="xh-squad-list" data-xh-squad></div>
           <div class="xh-mission-row"><span>WATCHTOWERS</span><b data-xh-towers>0/3</b></div>
           <div class="xh-mission-row"><span>TIMBER</span><b data-xh-timber>0/2</b></div>
+          <div class="xh-mission-row"><span data-xh-next-label>NEXT</span><b data-xh-next>—</b></div>
           <div class="xh-progress"><i data-xh-mission-bar></i></div>
           <button class="xh-btn rust wide" type="button" data-xh-sos>⛑ SOS WINCH BEACON <kbd>H</kbd></button>
         </div>
@@ -340,6 +341,8 @@ export class ExpeditionHUD {
       squad: q('[data-xh-squad]'),
       towers: q('[data-xh-towers]'),
       timber: q('[data-xh-timber]'),
+      nextLabel: q('[data-xh-next-label]'),
+      next: q('[data-xh-next]'),
       missionBar: q('[data-xh-mission-bar]'),
       fps: q('[data-xh-fps] b'),
       fpsBox: q('[data-xh-fps]'),
@@ -787,6 +790,21 @@ export class ExpeditionHUD {
     refs.timber.textContent = `${timber}/2`;
     const missionPct = towersTotal + 2 > 0 ? ((towersFound + timber) / (towersTotal + 2)) * 100 : 0;
     refs.missionBar.style.width = `${missionPct.toFixed(0)}%`;
+
+    // Where to drive next, and how far. The valley has no minimap, so without
+    // this the only navigation aid was finding a watchtower by accident.
+    if (refs.next && refs.nextLabel) {
+      const objective = this.missionManager.nextObjective?.(this.vehicle.body.position);
+      if (objective) {
+        refs.nextLabel.textContent = objective.label;
+        refs.next.textContent = objective.distance >= 1000
+          ? `${(objective.distance / 1000).toFixed(1)} KM`
+          : `${Math.round(objective.distance)} M`;
+      } else {
+        refs.nextLabel.textContent = 'NEXT';
+        refs.next.textContent = 'ALL CLEAR';
+      }
+    }
 
     /* ---- PSI cluster ---- */
     const psi = t.psi;

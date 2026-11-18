@@ -1358,6 +1358,45 @@ function readDriverInput(dt) {
   vehicle.setSteer(Math.max(-1, Math.min(1, steerValue * sensitivity)));
 }
 
+/* ---- driver assist ---------------------------------------------------
+ * The map is 2 km across with no minimap, a tank that can run dry and terrain
+ * that can put the truck on its roof in a ravine. None of those should need a
+ * wiki: detect the three states a driver actually gets stuck in and name the
+ * key that fixes each one. Throttled so it never nags.
+ * ------------------------------------------------------------------- */
+const UP_AXIS = new CANNON.Vec3(0, 1, 0);
+const _upWorld = new CANNON.Vec3();
+const assist = { flip: 0, bog: 0, lastFlip: -1e9, lastBog: -1e9, tankDry: false };
+
+function driverAssist(dt, now, telemetry) {
+  // On the roof: the chassis' local up has tipped past 70 degrees from world up.
+  vehicle.body.quaternion.vmult(UP_AXIS, _upWorld);
+  if (_upWorld.y < 0.35) assist.flip += dt;
+  else assist.flip = 0;
+  if (assist.flip > 1.4 && now - assist.lastFlip > 12000) {
+    assist.lastFlip = now;
+    toast('ON THE ROOF — PRESS R TO RESET');
+  }
+
+  // Bogged: pedal down, no forward progress for five seconds.
+  const throttling =
+    keys.has('KeyW') || keys.has('ArrowUp') || held.throttle || held.throttleAxis > 0.2;
+  if (throttling && Math.abs(telemetry.speedKmh) < 1.2 && assist.flip === 0) assist.bog += dt;
+  else assist.bog = 0;
+  if (assist.bog > 5 && now - assist.lastBog > 20000) {
+    assist.lastBog = now;
+    toast('BOGGED DOWN — WINCH (F) OR RESET (R)');
+  }
+
+  // Dry tank: say it once, and reset the flag if the tank is refilled.
+  if (telemetry.fuel < 1.5 && !assist.tankDry) {
+    assist.tankDry = true;
+    toast('TANK EMPTY — CAMP AT A FIRE (B) OR REFUEL AT A STATION');
+  } else if (telemetry.fuel > 5) {
+    assist.tankDry = false;
+  }
+}
+
 function frame(now) {
   if (!bootWatch.firstFrame) {
     bootWatch.firstFrame = Math.round(performance.now() - bootWatch.start);
@@ -1422,6 +1461,7 @@ function frame(now) {
 
   /* ---- Phase 7 systems ---- */
   const telemetry = vehicle.getTelemetry();
+  driverAssist(dt, now, telemetry);
   atmosphere.update(dt, now, telemetry);
   // Ground safety net. The heightfield is sampled at 2 m intervals, so a fast
   // wheel can step over a crest between collision steps and the truck drops
