@@ -25,6 +25,9 @@ export const SHADOW_MODES = {
   off: { label: 'Off', size: 0, type: THREE.BasicShadowMap },
   LOW_512: { label: 'Low (512px)', size: 512, type: THREE.PCFShadowMap },
   MED_1024: { label: 'Medium (1024px)', size: 1024, type: THREE.PCFShadowMap },
+  // Same filtering as the top mode, a quarter of the fill: the frame governor
+  // can drop shadow resolution without changing a single shader define.
+  HIGH_1024_SOFT: { label: 'High Soft (1024px)', size: 1024, type: THREE.PCFSoftShadowMap },
   HIGH_2048_SOFT: { label: 'High Soft (2048px)', size: 2048, type: THREE.PCFSoftShadowMap },
 };
 
@@ -273,7 +276,7 @@ function sanitise(raw) {
     }
   }
   // Numeric guards so a corrupted store cannot brick the game.
-  out.pixelRatio = Math.min(2, Math.max(0.5, out.pixelRatio));
+  out.pixelRatio = Math.min(2, Math.max(0.4, out.pixelRatio));
   out.drawDistance = Math.min(350, Math.max(100, out.drawDistance));
   out.foliageDensity = Math.min(1, Math.max(0, out.foliageDensity));
   out.particleBudget = Math.min(400, Math.max(0, out.particleBudget));
@@ -462,7 +465,15 @@ export class PerformanceOptimizer {
   _applyPixelRatio(ratio) {
     const renderer = this.renderer;
     if (!renderer) return;
-    const value = Math.min(2.5, Math.max(0.5, ratio));
+    const value = Math.min(2.5, Math.max(0.4, ratio));
+    const width = Math.round(window.innerWidth * value);
+    const height = Math.round(window.innerHeight * value);
+    // Every ratio change reallocates the drawing buffer and the composer's
+    // targets. Resizing costs milliseconds, so skip the no-ops: a window resize
+    // still gets through because the size changed, not the ratio.
+    if (this.effectivePixelRatio === value && this.renderedWidth === width && this.renderedHeight === height) {
+      return value;
+    }
     renderer.setPixelRatio(value);
     renderer.setSize(window.innerWidth, window.innerHeight, false);
     if (renderer.domElement) {
@@ -470,11 +481,24 @@ export class PerformanceOptimizer {
       renderer.domElement.style.height = '100%';
     }
     this.effectivePixelRatio = value;
-    this.renderedWidth = Math.round(window.innerWidth * value);
-    this.renderedHeight = Math.round(window.innerHeight * value);
+    this.renderedWidth = width;
+    this.renderedHeight = height;
     if (this.atmosphere && typeof this.atmosphere.onResolutionChanged === 'function') {
       this.atmosphere.onResolutionChanged(value);
     }
+    return value;
+  }
+
+  /**
+   * Dynamic-resolution hook for the frame governor. Applies a full scale change
+   * (renderer, drawing buffer, composer) without touching persistence or the
+   * player's preset, and returns the value actually used.
+   */
+  scaleResolution(ratio) {
+    const value = this._applyPixelRatio(ratio) ?? Math.min(2.5, Math.max(0.4, ratio));
+    this.settings.pixelRatio = value;
+    this.effectivePixelRatio = value;
+    return value;
   }
 
   _applyShadows(settings) {
@@ -482,6 +506,14 @@ export class PerformanceOptimizer {
     if (!renderer) return;
     const mode = SHADOW_MODES[settings.shadows] || SHADOW_MODES.off;
     const enabled = mode.size > 0;
+    // Recompiling every material in the scene is a multi-frame hitch, so it may
+    // only happen when the shadow *sampling* changes. The map resolution is a
+    // texture size, not a define, so dropping it from 2048 to 1024 must not
+    // recompile the world — otherwise the frame governor's first rung costs the
+    // machine it is trying to rescue several hundred milliseconds.
+    const definesKey = `${mode.type}:${enabled}`;
+    const changed = definesKey !== this._shadowSignature;
+    this._shadowSignature = definesKey;
 
     renderer.shadowMap.enabled = enabled;
     renderer.shadowMap.type = mode.type;
@@ -504,7 +536,7 @@ export class PerformanceOptimizer {
     }
 
     // Toggling the shadow map changes every material's program.
-    if (this.scene) {
+    if (changed && this.scene) {
       this.scene.traverse((object) => {
         if (!object.material) return;
         const list = Array.isArray(object.material) ? object.material : [object.material];
@@ -545,6 +577,11 @@ export class PerformanceOptimizer {
     }
     if (this.atmosphere && typeof this.atmosphere.setViewDistance === 'function') {
       this.atmosphere.setViewDistance(distance);
+    }
+    // The prop and ground-cover horizon has to move with the view distance, or
+    // the fog hides a cut that still costs a full draw call per chunk.
+    if (this.terrain && typeof this.terrain.setViewDistance === 'function') {
+      this.terrain.setViewDistance(distance);
     }
     if (this.terrain && this.terrain.mesh) {
       this.terrain.mesh.frustumCulled = true;
@@ -652,6 +689,9 @@ export class PerformanceOptimizer {
   }
 
   _autoScale(nowMs) {
+    // When the frame governor owns the resolution, a second auto-scaler writing
+    // its own value a few times a second just makes the image breathe.
+    if (this.externalScaleControl) return;
     if (!this.settings.autoScaleResolution) return;
     if (this._frameCount < 45) return;
     if (this.fps >= 42) return;

@@ -32,6 +32,64 @@ import {
   auditProvingGround,
   PROVING_GROUND,
 } from './ProvingGround.js';
+/* ---- display refresh probe -----------------------------------------
+ * A game cannot be smoother than the panel under it, and every budget in
+ * here is derived from the refresh rate rather than assumed to be 60. Empty
+ * animation frames measure the panel itself; 24 of them cost a fifth of a
+ * second at 120 Hz and two fifths at 60, while the boot screen is already on
+ * screen. Measuring the game's own frames instead would read a struggling
+ * machine as a 60 Hz one and give up on 120 before trying.
+ * ------------------------------------------------------------------ */
+const KNOWN_REFRESH = [60, 75, 90, 100, 120, 144, 165, 240];
+
+async function probeRefreshRate() {
+  const deltas = [];
+  const collected = new Promise((resolve) => {
+    let last = 0;
+    let ticks = 0;
+    const tick = (stamp) => {
+      if (last) deltas.push(stamp - last);
+      last = stamp;
+      ticks += 1;
+      if (ticks >= 24) resolve();
+      else requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+  // A hidden or backgrounded tab throttles animation frames to about 1 Hz, and
+  // the probe must never hold the boot screen hostage while it waits for them.
+  // With fewer than six samples the answer is "assume 60" either way.
+  await Promise.race([collected, new Promise((resolve) => setTimeout(resolve, 800))]);
+  if (deltas.length < 6) return { hz: 60, measured: 60, median: 16.7 };
+  const sorted = deltas.slice(4).sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)] || 16.7;
+  const measured = 1000 / median;
+  let hz = 60;
+  let best = Infinity;
+  for (const candidate of KNOWN_REFRESH) {
+    const delta = Math.abs(candidate - measured);
+    if (delta < best) {
+      best = delta;
+      hz = candidate;
+    }
+  }
+  // Only trust the snap to a known rate when it is close; otherwise keep the
+  // measurement, floored at 60: a browser that throttled the probe (background
+  // tab, virtual display, a slow first paint) must not turn into a 30 fps
+  // target. `?hz=` exists for panels and virtual displays that lie.
+  if (best / hz > 0.08) hz = Math.max(60, Math.round(measured));
+  try {
+    const forced = Number(new URLSearchParams(window.location.search).get('hz'));
+    if (Number.isFinite(forced) && forced >= 60) hz = forced;
+  } catch {
+    /* no query string, no override */
+  }
+  return { hz, measured: Math.round(measured), median: Math.round(median * 100) / 100 };
+}
+
+const display = await probeRefreshRate();
+window.__display = display;
+
 /* ---- boot watchdog -------------------------------------------------
  * Records how long the world took to build and, more importantly, how
  * long the main thread was ever blocked. Terrain generation is sliced, so
@@ -1380,11 +1438,11 @@ function frame(now) {
     settingsUI.update(dt);
   }
 
-  // 20 Hz shadow refresh. autoUpdate is off, so this is what keeps the sun's
-  // shadows following the truck; it costs one 5 ms shadow pass every 50 ms
-  // instead of one every frame.
+  // Throttled shadow refresh. autoUpdate is off, so this is what keeps the
+  // sun's shadows following the truck; the cadence stretches as the frame
+  // budget shrinks, so the pass lands on one frame in eight instead of one in two.
   shadowTimer += dt;
-  if (shadowTimer >= 0.05) {
+  if (shadowTimer >= governor.shadowInterval) {
     shadowTimer = 0;
     renderer.shadowMap.needsUpdate = true;
   }
@@ -1415,17 +1473,94 @@ function frame(now) {
  * ------------------------------------------------------------------ */
 
 const governor = {
-  // Rendering above 1.5x on a pitch-and-yaw chase camera is pixels nobody can
-  // see; 1.5 keeps text and the truck crisp while cutting fill by 44% on a
-  // 2x display.
-  cap: Math.min(window.devicePixelRatio || 1, 1.5),
+  // A panel cannot show more frames than it refreshes at, and 120 is the
+  // ceiling: above that the extra frames are invisible next to the hitches.
+  target: Math.min(120, display.hz),
+  // Pixels are the cheapest thing to lose and the hardest to notice at speed.
+  // At 120 Hz a 2x display asks for four times the fill of 1x for no visible
+  // gain, so the ceiling is native-ish resolution as soon as the target is
+  // high refresh, and 1.5x otherwise.
+  cap: Math.min(window.devicePixelRatio || 1, display.hz >= 100 ? 1 : 1.5),
+  retryAfter: 0,
+  floor: 0.4,
+  current: 1,
   strikes: 0,
   degrade: 0,
-  current: Math.min(window.devicePixelRatio || 1, 1.5),
+  goodWindows: 0,
+  recoverWindows: 0,
+  hzChecks: 0,
+  windowFps: [],
+  smoothFps: 60,
+  lastRungAt: 0,
   accumulator: 0,
   frames: 0,
   fps: 60,
+  // The sun's shadow map is a second submission of every caster. Eight frames
+  // a second of lag on a shadow is invisible; a 2048 shadow pass landing in an
+  // 8.3 ms budget is not.
+  shadowInterval: display.hz >= 100 ? 0.08 : 0.05,
 };
+governor.current = governor.cap;
+
+// Everything the ladder is allowed to take away, captured so it can be handed
+// back later. `baseline` is the player's own settings, `ladderBase` is what the
+// current frame-rate profile started from. Both are filled in once the
+// optimizer exists.
+const baseline = { settings: null };
+let ladderBase = null;
+
+/* What the ladder sheds, in the order it costs the most frame time per unit of
+ * visible difference. Each step is cumulative and reversible. */
+const DEGRADE_STEPS = [
+  null, // 0 — the player's own settings
+  { postProcessing: false },
+  { shadows: 'HIGH_1024_SOFT', shadowInterval: 0.1 },
+  { drawDistance: 190, foliageDensity: 0.35, particleBudget: 80 },
+  { drawDistance: 130, foliageDensity: 0.1, particleBudget: 30 },
+  { shadows: 'off', shadowInterval: 0.2 },
+];
+
+/** Recompute the frame configuration for a rung of the ladder, from the top. */
+function applyLadder(level) {
+  const clamped = Math.max(0, Math.min(DEGRADE_STEPS.length - 1, level));
+  const base = ladderBase || baseline.settings || optimizer.settings;
+  const patch = {
+    postProcessing: base.postProcessing,
+    shadows: base.shadows,
+    drawDistance: base.drawDistance,
+    foliageDensity: base.foliageDensity,
+    particleBudget: base.particleBudget,
+  };
+  let shadowInterval = governor.target >= 100 ? 0.08 : 0.05;
+  for (let i = 1; i <= clamped; i += 1) {
+    const step = DEGRADE_STEPS[i];
+    if (step.postProcessing !== undefined) patch.postProcessing = step.postProcessing;
+    if (step.shadows) patch.shadows = step.shadows;
+    if (step.drawDistance) patch.drawDistance = step.drawDistance;
+    if (step.foliageDensity !== undefined) patch.foliageDensity = step.foliageDensity;
+    if (step.particleBudget !== undefined) patch.particleBudget = step.particleBudget;
+    if (step.shadowInterval) shadowInterval = step.shadowInterval;
+  }
+  governor.shadowInterval = shadowInterval;
+  // Re-applying unchanged settings rebuilds grass and re-uploads textures, which
+  // is exactly the hitch a struggling machine cannot afford, so only the keys
+  // that actually move are pushed.
+  const changed = {};
+  let count = 0;
+  for (const key of Object.keys(patch)) {
+    if (optimizer.settings[key] !== patch[key]) {
+      changed[key] = patch[key];
+      count += 1;
+    }
+  }
+  if (count) {
+    // Never persisted and never marked custom: the saved preset is the player's,
+    // and it is what Settings has to keep reporting.
+    optimizer.applySettings(changed, { persist: false, markCustom: false });
+  }
+  governor.degrade = clamped;
+  window.__fpsDegrade = clamped;
+}
 
 function fpsGovernor(dt) {
   // A backgrounded tab has its animation frames throttled to about 1 Hz, which
@@ -1442,75 +1577,114 @@ function fpsGovernor(dt) {
   if (!governor.stamp) governor.stamp = now;
   governor.accumulator = (now - governor.stamp) / 1000;
   governor.frames += 1;
-  if (governor.accumulator < 0.75) return;
+  // Half a second: at 120 Hz a bad quality decision is 60 wasted frames, so
+  // the loop has to be able to change its mind twice a second.
+  if (governor.accumulator < 0.5) return;
 
+  const fps = governor.frames / governor.accumulator;
   governor.stamp = now;
-  governor.fps = governor.frames / governor.accumulator;
+  governor.fps = fps;
   governor.accumulator = 0;
   governor.frames = 0;
 
-  // 60 FPS is the target, not 50: the governor now bleeds resolution faster
-  // when a frame is badly over budget and only climbs back when there is real
-  // headroom, so it settles at 60 instead of hovering at 50.
-  const target = 60;
+  // Decide on the median of the last five windows, not on one of them. Every
+  // real machine has a half-second of shader compilation or a tab switch in it,
+  // and a governor that reacts to that single window strips the world bare and
+  // never puts it back.
+  governor.windowFps.push(fps);
+  if (governor.windowFps.length > 5) governor.windowFps.shift();
+  const sorted = governor.windowFps.slice().sort((a, b) => a - b);
+  const smooth = sorted[Math.floor(sorted.length / 2)];
+  governor.smoothFps = smooth;
+
+  const target = governor.target;
   let next = governor.current;
 
-  if (governor.fps < target - 5 && governor.current > 0.45) {
-    const step = governor.fps < 36 ? 0.2 : 0.1;
-    next = Math.max(0.45, governor.current - step);
-  } else if (governor.fps > target + 10 && governor.current < governor.cap) {
-    next = Math.min(governor.cap, governor.current + 0.06);
+  if (smooth < target * 0.92 && governor.current > governor.floor) {
+    // One missed deadline at 120 Hz costs a whole extra 8.3 ms slot, so this
+    // moves in bigger steps than a 60 Hz governor would, and immediately.
+    const step = fps < target * 0.7 ? 0.15 : 0.07;
+    next = Math.max(governor.floor, governor.current - step);
+    // Do not climb straight back into the ratio that just failed: give the 
+    // machine four seconds before the resolution is allowed to grow again, so
+    // the governor settles instead of breathing.
+    governor.retryAfter = now + 4000;
+    governor.goodWindows = 0;
+  } else if (smooth >= target * 0.98 && governor.current < governor.cap && now > governor.retryAfter) {
+    governor.goodWindows += 1;
+    if (governor.goodWindows >= 4) {
+      governor.goodWindows = 0;
+      next = Math.min(governor.cap, governor.current + 0.04);
+    }
+  } else {
+    governor.goodWindows = 0;
   }
 
-  if (Math.abs(next - governor.current) > 0.01) {
+  if (Math.abs(next - governor.current) > 0.001) {
     governor.current = next;
-    renderer.setPixelRatio(next);
-    // The optimizer has an auto-scaler of its own. Keep its idea of the ratio in
-    // step or the two of them write different values into the renderer and the
-    // resolution visibly bounces between them.
-    optimizer.settings.pixelRatio = next;
-    optimizer.effectivePixelRatio = next;
+    // The optimizer owns the renderer and the post-processing targets, so the
+    // scale goes through it and the bloom chain does not end up a different
+    // size from the drawing buffer.
+    if (typeof optimizer.scaleResolution === 'function') optimizer.scaleResolution(next);
+    else renderer.setPixelRatio(next);
     window.__fpsScale = +next.toFixed(2);
   }
 
-  // Resolution alone cannot always reach the target on an integrated GPU, so
-  // once the floor is reached the expensive passes go in order of what costs
-  // the most frame time per unit of visible difference: bloom and the film
-  // grade first, then shadows. One-way on purpose — a machine that cannot hold
-  // 60 should not oscillate between 60 with no shadows and 40 with them.
-  if (governor.fps < 46) governor.strikes += 1;
+  // Pixels first: they are the recoverable, least visible thing to lose. Only
+  // once the floor is reached does the world itself start going away.
+  const atFloor = governor.current <= governor.floor + 0.001;
+  if (smooth < target * 0.9 && atFloor) governor.strikes += 1;
   else governor.strikes = Math.max(0, governor.strikes - 1);
 
-  // Only shed passes once resolution has already bottomed out: a machine that
-  // can reach 60 by dropping pixels should keep its shadows.
-  if (governor.strikes >= 4 && governor.degrade < 4 && governor.current <= 0.46) {
+  // One rung per 1.5 s at the earliest: the rung itself has to be allowed to
+  // show what it bought before the next thing is taken away.
+  const settled = now - governor.lastRungAt > 1500;
+  if (governor.strikes >= 3 && settled && governor.degrade < DEGRADE_STEPS.length - 1) {
     governor.strikes = 0;
-    governor.degrade += 1;
-    if (governor.degrade === 1 && typeof atmosphere.setPostProcessing === 'function') {
-      atmosphere.setPostProcessing(false);
-    } else if (governor.degrade === 2) {
-      renderer.shadowMap.enabled = false;
-      renderer.shadowMap.autoUpdate = false;
-      sun.castShadow = false;
-    } else if (governor.degrade === 3) {
-      // Everything above is per-pixel. If the frame is still over budget the
-      // only thing left is how much world is drawn: pull the view in to the LOW
-      // preset's distance. Not persisted, so the player's own preset survives.
-      optimizer.applySettings(
-        { drawDistance: 170, foliageDensity: 0.25, particleBudget: 60 },
-        { persist: false, markCustom: false },
-      );
-    } else if (governor.degrade === 4) {
-      optimizer.applySettings(
-        { drawDistance: 120, foliageDensity: 0, particleBudget: 20 },
-        { persist: false, markCustom: false },
-      );
+    governor.recoverWindows = 0;
+    governor.lastRungAt = now;
+    applyLadder(governor.degrade + 1);
+  } else if (governor.degrade > 0 && smooth >= target * 0.99) {
+    // Sustained headroom at a degraded rung: hand one thing back. Six windows
+    // is three seconds, long enough that a corner or a shader compile cannot
+    // trigger it.
+    governor.recoverWindows += 1;
+    if (governor.recoverWindows >= 6) {
+      governor.recoverWindows = 0;
+      governor.lastRungAt = now;
+      applyLadder(governor.degrade - 1);
     }
-    window.__fpsDegrade = governor.degrade;
+  } else {
+    governor.recoverWindows = 0;
+  }
+
+  // A high-refresh target that lands on 60.0 every single window is not a slow
+  // GPU, it is a 60 Hz panel (or a tab whose animation frames are pinned to 60),
+  // and no amount of stripping will change that. Target what the device can
+  // actually show and give the visuals back rather than leaving the game
+  // permanently degraded for a frame rate the screen cannot display.
+  const panelCeiling = smooth >= 57 && smooth <= 63;
+  const exhausted = governor.degrade >= DEGRADE_STEPS.length - 1;
+  if (governor.target > 60 && panelCeiling && exhausted) {
+    governor.hzChecks += 1;
+    if (governor.hzChecks >= 6) {
+      governor.hzChecks = 0;
+      governor.target = 60;
+      governor.cap = Math.min(window.devicePixelRatio || 1, 1.5);
+      governor.windowFps.length = 0;
+      governor.strikes = 0;
+      governor.recoverWindows = 0;
+      if (baseline.settings) ladderBase = { ...baseline.settings };
+      applyLadder(0);
+      window.__targetFps = 60;
+    }
+  } else if (governor.target > 60) {
+    governor.hzChecks = 0;
   }
 }
 
 window.__governor = governor;
+window.__setDegrade = applyLadder;
 
 window.__game = {
   scene, camera, renderer, world, vehicle, trailer, quality, cameraController,
@@ -1520,6 +1694,41 @@ window.__game = {
   test: provingBench, testHud: provingHud, provingGround: TEST_MODE ? PROVING_GROUND : null,
   landmarks, styleDNA, regionAt, waterSystem, styleOverhaul, overlandStyle,
 };
+
+/* ---- high-refresh frame profile ------------------------------------
+ * 120 Hz halves the frame budget to 8.3 ms, so the pixels and passes a HIGH
+ * preset spends it on have to go first. This runs after the optimizer's own
+ * preset, because a stored ULTRA setting must not quietly reintroduce the cost,
+ * and it is never persisted: the player's preset stays exactly what Settings
+ * reports. At 60 Hz nothing here fires and the game looks as it did.
+ * ------------------------------------------------------------------- */
+baseline.settings = { ...optimizer.settings };
+// The governor owns the resolution; the optimizer's own auto-scaler would write
+// a different value into the renderer every half second and fight it.
+optimizer.externalScaleControl = true;
+
+if (governor.target >= 100) {
+  // A 60 cap would pin a 120 Hz panel to half rate whatever the GPU does, and
+  // every weaker preset sets one.
+  if (optimizer.settings.fpsCap === 60) optimizer.settings.fpsCap = 0;
+  optimizer.applySettings(
+    {
+      pixelRatio: governor.cap,
+      postProcessing: false,
+      shadows: 'HIGH_1024_SOFT',
+      drawDistance: 190,
+      foliageDensity: 0.6,
+      particleBudget: 120,
+    },
+    { persist: false, markCustom: false },
+  );
+  governor.shadowInterval = 0.08;
+  ladderBase = { ...optimizer.settings };
+}
+
+governor.current = Math.min(governor.cap, optimizer.effectivePixelRatio || governor.cap);
+window.__fpsScale = +governor.current.toFixed(2);
+window.__targetFps = governor.target;
 
 // Phase 7 adds a lot of new shader programs (wind-blown foliage, beams, post
 // passes). Link them up front so the first frames never draw a half-linked

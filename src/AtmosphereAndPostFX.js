@@ -151,6 +151,9 @@ export class AtmosphereAndPostFX {
 
     this._pmrem = new THREE.PMREMGenerator(renderer);
     this._pmrem.compileEquirectangularShader();
+    // Sun direction the current environment map was built from, so the rebuild
+    // can be skipped while the sky is effectively unchanged.
+    this._lastEnvDir = new THREE.Vector3();
     this._envRT = null;
     this._envDirty = true;
     this._envTimer = 0;
@@ -493,6 +496,7 @@ export class AtmosphereAndPostFX {
       this._envRT = this._pmrem.fromScene(skyScene, 0.02);
       this.scene.environment = this._envRT.texture;
       this.scene.environmentIntensity = this.night ? 0.22 : 0.5;
+      this._lastEnvDir.copy(this._sunDir);
     } catch {
       // PMREM can fail on very small GPUs; the scene just keeps its last env.
     }
@@ -722,11 +726,17 @@ export class AtmosphereAndPostFX {
     // Blending every frame is cheap; the PMREM rebuild is throttled hard.
     this.applyPhase(dt);
 
+    // Rebuilding the PMREM cubemap is a multi-millisecond GPU job, and in eight
+    // seconds the sun moves a few degrees. Rebuilding it every 2.5 s spent a
+    // dropped frame on a reflection almost nobody can see; now it only happens
+    // when the sky has actually changed enough to be worth the hitch.
     this._envTimer += dt;
-    if (this._envTimer > 2.5) {
+    if (this._envTimer > 8) {
       this._envTimer = 0;
-      this._envDirty = true;
-      this.applyPhase(dt, true);
+      if (this._lastEnvDir.angleTo(this._sunDir) > 0.005) {
+        this._envDirty = true;
+        this.applyPhase(dt, true);
+      }
     }
 
     // Height-based exponential fog: thin air up high, soup in the valley.

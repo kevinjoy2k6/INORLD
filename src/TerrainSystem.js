@@ -377,6 +377,10 @@ export class TerrainSystem {
     this._colliderX = Infinity;
     this._colliderZ = Infinity;
     this._colliderRadius = 0;
+    // How far out props and ground cover are kept alive. The frame governor
+    // pulls this in when the frame budget is tighter than the view; it is not a
+    // quality preset, so the player's settings are untouched by it.
+    this.viewCutoff = 320;
     this.foliageMask = new Uint8Array(VERTS * VERTS);
     this._foliageMeshes = [];
     this.group = new THREE.Group();
@@ -1585,7 +1589,10 @@ export class TerrainSystem {
    */
   updateLOD(camera) {
     if (!this._lodGroups.length || !camera) return;
-    const fogFar = this.scene?.fog?.far ?? 320;
+    // FogExp2 has no `far`, but QualityManager still assigns one, so the old
+    // fallback here silently became "draw everything to 518 m". The governor's
+    // cutoff is the real limit; the fog is kept dense enough to hide the cut.
+    const fogFar = Math.min(this.viewCutoff, this.scene?.fog?.far ?? 320);
     const outer = Math.max(140, fogFar * 1.08);
     const cx = camera.position.x;
     const cz = camera.position.z;
@@ -1638,6 +1645,15 @@ export class TerrainSystem {
       }
       this.lodStats.groundVisible = groundVisible;
     }
+  }
+
+  /**
+   * Prop/ground-cover horizon, in metres. Set by the performance optimizer from
+   * the draw distance, so the frame governor's view-distance rungs actually
+   * remove work instead of only thickening the fog.
+   */
+  setViewDistance(distance) {
+    this.viewCutoff = Math.max(120, Math.min(320, distance));
   }
 
   async _scatter() {
