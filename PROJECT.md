@@ -257,6 +257,7 @@ winchSystem.update(dt, now)
 missionManager.update(dt, now)
 rescue beacon visibility/rotation
 networkManager.update(dt, now)             // 20 Hz tick, interpolation
+driverAssist(dt, now, telemetry)           // rollover / bogged / dry-tank prompts
 atmosphere.update(dt, now, telemetry)      // clock, fog, campfires, sky scale
 ground safety net                          // if body.y < terrainY - 1.2 → snap to +1.15
 landmarks.update(dt, vehicle, atmosphere.night)
@@ -795,8 +796,10 @@ quality|fps|physics|camera|trailer`.
 
 - `UIManager` — lobby overlay, paint/accessory grids, legacy HUD wiring, touch
   buttons, network callbacks, `_inLobby` flag.
-- `ExpeditionHUD` — gear gate, CTIS cluster, drivetrain rockers, expedition pill,
-  mobile cockpit. Never owns simulation state; calls the same APIs as the keyboard.
+- `ExpeditionHUD` — gear gate, CTIS cluster, drivetrain rockers, expedition pill
+  (room, squad distances, watchtower/timber counters and the **NEXT** row: the
+  objective label + live distance from `MissionManager.nextObjective()`), mobile
+  cockpit. Never owns simulation state; calls the same APIs as the keyboard.
 - `GraphicsSettingsUI` — three tabs (Graphics & Performance / Controls & Mobile UI
   / Audio & Atmosphere), hardware banner, presets, every optimizer knob.
 - `main.js` — the legacy HUD element cache, `toast()`, and the co-op failure
@@ -845,6 +848,16 @@ HUD/telemetry DOM: **12.5 Hz** (`hudRefresh >= 0.08`). FPS text and smoothing:
   Bridge site search samples a 190 m half-extent on an 8 m grid and prefers a
   water crossing.
 - State crosses the wire via `getState()/setState()` and `mission-event`.
+- `nextObjective(position)` is the single source of truth for "where now": the
+  bridge while `bundlesInTrailer > 0`, else the nearest undiscovered watchtower,
+  else the mill while fewer than two bundles are delivered. Returns
+  `{ kind, label, zone, distance }` or `null` when everything is done. The HUD
+  formats it as `LABEL` + `123 M` / `1.2 KM`.
+- **Driver assist** (`driverAssist()` in `main.js`, once per frame): 1.4 s with the
+  chassis up-vector below 0.35 → `ON THE ROOF — PRESS R TO RESET` (12 s cooldown);
+  5 s of throttle with |speed| < 1.2 km/h → `BOGGED DOWN — WINCH (F) OR RESET (R)`
+  (20 s cooldown); tank below 1.5 L once → `TANK EMPTY — CAMP AT A FIRE (B) OR
+  REFUEL AT A STATION` (re-arms above 5 L). Every prompt names an existing key.
 
 `WinchSystem`: `F` hooks the nearest cargo (teammate first, then a tree/rock/pole
 `WinchAnchor` within 18 m), `F` again releases; `E` transfers 20 L within 6 m.
@@ -1011,6 +1024,7 @@ frame, so read the stats after a render or via `captureRenderStats`.
 | `a1d82d2` | scenery collider streaming around the truck: `world.step` 14.5 ms → 0.08 ms, world bodies 2 868 → ~15 |
 | `8394969` | **120 Hz frame budget**: display refresh probe, governor target/cap/floor rewrite, reversible quality ladder, high-refresh boot profile, shadow-cadence and recompile fixes, `viewCutoff` LOD clamp, PMREM gating |
 | `071c117` | audit fixes: unreachable timber key → `M`, truthful lobby legend, co-op failures no longer fatal (plus null-safe legacy net helpers), typing/menu input guards, WebGL context-loss message, audio context suspended with a hidden tab |
+| `f23f0a2` | gameplay: `MissionManager.nextObjective()` + HUD **NEXT** distance row, driver-assist prompts for rollover, being bogged and a dry tank |
 
 Earlier work still in force: 150 m chunked props with distance LOD and far proxies,
 catenary wires removed, poles on one side only, shadow pass throttled, water mirror
