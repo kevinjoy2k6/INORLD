@@ -528,7 +528,13 @@ Order of ownership for "how it looks": `QualityManager` (tier) →
 ### 8.2 Post chain
 
 `EffectComposer` with a half-resolution `UnrealBloomPass` (its `setSize` is
-overridden to 0.5× and a 64 px floor), a grade pass and an `OutputPass`. Disabled
+overridden to 0.5× and a 64 px floor), a grade pass, a sharpen pass and an
+`OutputPass`. The sharpen is a nine-tap unsharp mask (`SHARPEN_SHADER`,
+`uStrength` 0.9) whose amount is gated by local contrast, so haze and flat paint
+keep their gradients; `uTexel` comes from `renderer.getDrawingBufferSize()` via
+`_syncSharpenTexel()` on every resize so the radius holds at any DPR. Bloom
+radius is 0.32 and phase/region strengths stay below 0.16 — a wide bloom halo
+bleeds across the faceted silhouettes the style depends on. Disabled
 entirely (`composerEnabled = false`) on LOW tiers, when `postProcessing` is false,
 in the high-refresh profile, at ladder rung ≥ 1, and in photo mode's raw mode.
 
@@ -1060,6 +1066,7 @@ frame, so read the stats after a render or via `captureRenderStats`.
 | `071c117` | audit fixes: unreachable timber key → `M`, truthful lobby legend, co-op failures no longer fatal (plus null-safe legacy net helpers), typing/menu input guards, WebGL context-loss message, audio context suspended with a hidden tab |
 | `f23f0a2` | gameplay: `MissionManager.nextObjective()` + HUD **NEXT** distance row, driver-assist prompts for rollover, being bogged and a dry tank |
 | `9eeb085` | landmarks: `LandmarkModels` + `PointsOfInterest` — castle keeps on the watchtower sites, gatehouse and curtain walls at the river crossing, three ruin fields, 132 trail cairns and named trailhead signposts; whole layer baked to 17 meshes / 24.5k triangles |
+| low-poly/sharp | **low-poly + crisp pass**: nine-tap unsharp-mask `ShaderPass` (strength 0.9, contrast-gated) after the grade, bloom strength cut across all phases and region palettes (0.34 → 0.16 max) with a 0.32 radius, grade contrast 1.1 → 1.16, five-sided trunks/poles, six-sided pines, 20-facet boulders, all flat-shaded |
 
 Earlier work still in force: 150 m chunked props with distance LOD and far proxies,
 catenary wires removed, poles on one side only, shadow pass throttled, water mirror

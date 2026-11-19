@@ -46,7 +46,7 @@ export const REGIONS = [
       sunTint: 0xffd1a1,
       ambient: 0x3d4f6b,
       exposure: 1.02,
-      bloom: 0.34,
+      bloom: 0.16,
     },
     // Rolling and soft: squash the amplitude of the base noise.
     shape(h, x, z) {
@@ -68,7 +68,7 @@ export const REGIONS = [
       sunTint: 0xffc27a,
       ambient: 0x4a3d63,
       exposure: 1.06,
-      bloom: 0.28,
+      bloom: 0.13,
     },
     // Terraced benches: quantise the height into 7 m steps and blend.
     shape(h, x, z, noise) {
@@ -92,7 +92,7 @@ export const REGIONS = [
       sunTint: 0xfff0cf,
       ambient: 0x2f4a63,
       exposure: 1.0,
-      bloom: 0.22,
+      bloom: 0.11,
     },
     shape(h, x, z) {
       const lift = Math.pow(Math.max(0, (z - 130) / 190), 1.6) * 26;
@@ -113,7 +113,7 @@ export const REGIONS = [
       sunTint: 0xfff6e0,
       ambient: 0x3a6a86,
       exposure: 1.08,
-      bloom: 0.2,
+      bloom: 0.1,
     },
     // Beach falls away to the sea; the water plane does the rest.
     shape(h, x, z) {

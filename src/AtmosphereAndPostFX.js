@@ -41,7 +41,7 @@ const PHASES = [
     fogColor: 0xbcccd8,
     fogDensity: 0.0115,
     exposure: 0.94,
-    bloom: 0.2,
+    bloom: 0.1,
     night: false,
     weather: 'mist',
   },
@@ -58,7 +58,7 @@ const PHASES = [
     fogColor: 0xcdbfae,
     fogDensity: 0.0068,
     exposure: 1.05,
-    bloom: 0.3,
+    bloom: 0.14,
     night: false,
     weather: 'clear',
   },
@@ -75,7 +75,7 @@ const PHASES = [
     fogColor: 0x93a3b2,
     fogDensity: 0.0135,
     exposure: 1.0,
-    bloom: 0.16,
+    bloom: 0.08,
     night: false,
     weather: 'rain',
   },
@@ -92,13 +92,65 @@ const PHASES = [
     fogColor: 0x070f1b,
     fogDensity: 0.019,
     exposure: 1.08,
-    bloom: 0.8,
+    bloom: 0.4,
     night: true,
     weather: 'clear',
   },
 ];
 
 const DAY_SECONDS = 300; // one full cycle in 5 minutes of driving
+
+/*
+ * Edge sharpen, applied after the grade and before tone mapping.
+ *
+ * The low-poly look lives or dies on crisp silhouettes: bloom, fog and the
+ * half-resolution output buffer all smear edges, and soft edges make a
+ * faceted world read as a blurry one. A nine-tap unsharp mask takes back about
+ * a pixel of that without the ringing a full-strength sharpen leaves on the
+ * sky. The amount is modulated by local contrast so flat areas (fog, haze,
+ * paint) stay smooth and only real edges get the boost.
+ */
+const SHARPEN_SHADER = {
+  uniforms: {
+    tDiffuse: { value: null },
+    uTexel: { value: new THREE.Vector2(1 / 1280, 1 / 720) },
+    uStrength: { value: 0.9 },
+  },
+  vertexShader: /* glsl */ `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+    }`,
+  fragmentShader: /* glsl */ `
+    uniform sampler2D tDiffuse;
+    uniform vec2 uTexel;
+    uniform float uStrength;
+    varying vec2 vUv;
+
+    void main() {
+      vec4 base = texture2D( tDiffuse, vUv );
+      vec3 c = base.rgb;
+
+      vec3 n = texture2D( tDiffuse, vUv + vec2( 0.0, uTexel.y ) ).rgb;
+      vec3 s = texture2D( tDiffuse, vUv - vec2( 0.0, uTexel.y ) ).rgb;
+      vec3 e = texture2D( tDiffuse, vUv + vec2( uTexel.x, 0.0 ) ).rgb;
+      vec3 w = texture2D( tDiffuse, vUv - vec2( uTexel.x, 0.0 ) ).rgb;
+      vec3 ne = texture2D( tDiffuse, vUv + uTexel ).rgb;
+      vec3 nw = texture2D( tDiffuse, vUv + vec2( -uTexel.x, uTexel.y ) ).rgb;
+      vec3 se = texture2D( tDiffuse, vUv + vec2( uTexel.x, -uTexel.y ) ).rgb;
+      vec3 sw = texture2D( tDiffuse, vUv - uTexel ).rgb;
+
+      vec3 blur = ( n + s + e + w ) * 0.15 + ( ne + nw + se + sw ) * 0.1;
+      vec3 detail = c - blur;
+
+      // Only crisp real edges: haze and flat paint keep their gradient.
+      float edge = smoothstep( 0.004, 0.05, length( detail ) );
+      float amount = uStrength * ( 0.4 + 0.6 * edge );
+
+      gl_FragColor = vec4( clamp( c + detail * amount, 0.0, 1.0 ), base.a );
+    }`,
+};
 
 function lerp(a, b, t) {
   return a + (b - a) * t;
@@ -233,7 +285,9 @@ export class AtmosphereAndPostFX {
     this.bloom = new UnrealBloomPass(
       new THREE.Vector2(size.x, size.y),
       0.3, // strength
-      0.5, // radius
+      // A tight radius keeps the glow on the lamp it belongs to. A wide one
+      // bleeds across silhouettes and undoes the faceted read of the world.
+      0.32, // radius
       0.95, // threshold
     );
     // Bloom is a chain of full-screen mip blurs, so its cost is pure fill. At
@@ -252,8 +306,8 @@ export class AtmosphereAndPostFX {
     this.grade = new ShaderPass({
       uniforms: {
         tDiffuse: { value: null },
-        saturation: { value: 1.22 },
-        contrast: { value: 1.1 },
+        saturation: { value: 1.28 },
+        contrast: { value: 1.16 },
         lift: { value: 0.015 },
         warm: { value: new THREE.Vector3(1.04, 1.0, 0.94) },
         cool: { value: new THREE.Vector3(0.93, 0.98, 1.09) },
@@ -291,10 +345,21 @@ export class AtmosphereAndPostFX {
     });
     this.composer.addPass(this.grade);
 
+    this.sharpen = new ShaderPass(SHARPEN_SHADER);
+    this.composer.addPass(this.sharpen);
+
     this.composer.addPass(new OutputPass());
 
     this.composer.setSize(size.x, size.y);
+    this._syncSharpenTexel();
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  }
+
+  /** One sharpen texel, in drawing-buffer pixels, so the radius holds at any DPR. */
+  _syncSharpenTexel() {
+    if (!this.sharpen) return;
+    const buffer = this.renderer.getDrawingBufferSize(new THREE.Vector2());
+    this.sharpen.uniforms.uTexel.value.set(1 / Math.max(1, buffer.x), 1 / Math.max(1, buffer.y));
   }
 
   /** Phase 8: post-processing can be toggled independently of the tier. */
@@ -307,6 +372,7 @@ export class AtmosphereAndPostFX {
     this.composerEnabled = !!on;
     if (this.bloom) this.bloom.enabled = this.composerEnabled;
     if (this.grade) this.grade.enabled = this.composerEnabled;
+    if (this.sharpen) this.sharpen.enabled = this.composerEnabled;
   }
 
   /** Phase 8: how far the world is drawn; fog is clamped to hide the cut. */
@@ -318,6 +384,7 @@ export class AtmosphereAndPostFX {
     const size = this.renderer.getSize(new THREE.Vector2());
     if (this.composer) this.composer.setSize(size.x, size.y);
     if (this.bloom) this.bloom.resolution.set(size.x, size.y);
+    this._syncSharpenTexel();
   }
 
   /** Phase 8: the player can pin the clock from Settings. */
@@ -340,6 +407,7 @@ export class AtmosphereAndPostFX {
     const size = this.renderer.getSize(new THREE.Vector2());
     this.composer.setSize(size.x, size.y);
     if (this.bloom) this.bloom.enabled = this.composerEnabled;
+    if (this.sharpen) this.sharpen.enabled = this.composerEnabled;
     if (this._spotLights) {
       for (const s of this._spotLights) s.castShadow = tier === 'HIGH';
     }
@@ -349,6 +417,7 @@ export class AtmosphereAndPostFX {
     if (!this.composer) return;
     this.composer.setSize(width, height);
     if (this.bloom) this.bloom.resolution.set(width, height);
+    this._syncSharpenTexel();
   }
 
   /* ================================================================== *

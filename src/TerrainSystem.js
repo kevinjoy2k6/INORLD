@@ -1659,15 +1659,18 @@ export class TerrainSystem {
   async _scatter() {
     const random = mulberry32(this.seed ^ 0x2545f491);
 
-    const trunkGeometry = new THREE.CylinderGeometry(0.22, 0.32, 3.2, 6);
-    const pineGeometry = new THREE.ConeGeometry(1.9, 6.4, 7);
-    const boulderGeometry = new THREE.IcosahedronGeometry(1, 1);
-    const poleGeometry = new THREE.CylinderGeometry(0.13, 0.15, 4.6, 6);
+    // Low-poly silhouettes: five-sided trunks and poles, six-sided pines and a
+    // twenty-facet boulder. Fewer sides is the whole look — a smooth cylinder
+    // next to a faceted stone reads as a different, older art style.
+    const trunkGeometry = new THREE.CylinderGeometry(0.22, 0.32, 3.2, 5);
+    const pineGeometry = new THREE.ConeGeometry(1.9, 6.4, 6);
+    const boulderGeometry = new THREE.IcosahedronGeometry(1, 0);
+    const poleGeometry = new THREE.CylinderGeometry(0.13, 0.15, 4.6, 5);
 
-    const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x4a3a28, roughness: 0.95 });
+    const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x4a3a28, roughness: 0.95, flatShading: true });
     const pineMaterial = new THREE.MeshStandardMaterial({ color: 0x2c4a32, roughness: 0.9, flatShading: true });
     const boulderMaterial = new THREE.MeshStandardMaterial({ color: 0x6a6259, roughness: 0.94, flatShading: true });
-    const poleMaterial = new THREE.MeshStandardMaterial({ color: 0x6d5433, roughness: 0.9 });
+    const poleMaterial = new THREE.MeshStandardMaterial({ color: 0x6d5433, roughness: 0.9, flatShading: true });
 
     // Counts scale with the map area, or 2 km reads as an empty plain.
     const TREES = 1900;
