@@ -38,18 +38,18 @@ export const PALETTE = {
   vehicleYellow: 0xe8c638,
   vehicleTeal: 0x389890,
   vehicleRed: 0xd9383a,
-  waterShaderDeep: 0x3ba8c4,
+  waterShaderDeep: 0x42a4cb,
   waterShaderShallow: 0x9ba8a4,
 };
 
 /** Ground colours the terrain's biome lookup should use under the new palette. */
 const BIOME_COLOURS = {
-  trail: 0xb08a55,
-  hardpack: 0xd8b36a,
-  mud: 0x7d5f3d,
-  sand: 0xe8c98a,
+  trail: 0xd2ab7f,
+  hardpack: 0xeccb9f,
+  mud: 0xb08e68,
+  sand: 0xedbf9c,
   snow: 0xeef2f5,
-  rock: 0x9aa0a8,
+  rock: 0xd6a88c,
   water: 0x5f9aa2,
 };
 
@@ -62,9 +62,12 @@ export function applyStylePalette() {
     const biome = BIOMES[key];
     if (biome) biome.color = colour;
   }
+  // Ground tints: the canyon is sun-bleached sand and oxidised red rock, not
+  // pure orange. The rock gets its colour from MesaField's strata; the ground
+  // under it has to be pale enough for the strata to sit on top of.
   const regionTints = {
     meadow: 0xf3b552,
-    canyon: 0xd96b38,
+    canyon: 0xe0a888,
     alpine: 0xa9b3bd,
     coast: 0xe8c98a,
   };
@@ -154,7 +157,7 @@ export class StyleOverhaul {
     // palette: golden meadow, rust canyon, cold alpine, bleached coast.
     this._regionTints = {
       meadow: 0xf0b455,
-      canyon: 0xd0884a,
+      canyon: 0xe0a888,
       alpine: 0xa9b3bd,
       coast: 0xe3c48f,
     };
@@ -261,10 +264,28 @@ export class StyleOverhaul {
     const water = this.water?.water;
     if (!water?.material) return;
     const uniforms = water.material.uniforms;
+
+    // Three's Water shader shades water almost entirely by what it reflects,
+    // which under a pale sky is pale sky: the basin river came out grey-white.
+    // Pulling the final radiance toward the water colour itself is what makes
+    // a desert river read turquoise while still showing the mirror.
+    const material = water.material;
+    if (material.fragmentShader.includes('vec3 outgoingLight = albedo;')) {
+      material.fragmentShader = material.fragmentShader.replace(
+        'vec3 outgoingLight = albedo;',
+        'vec3 outgoingLight = mix( albedo, waterColor * 1.35, 0.6 );',
+      );
+      material.needsUpdate = true;
+    }
     if (uniforms.waterColor) uniforms.waterColor.value.setHex(PALETTE.waterShaderDeep);
-    if (uniforms.distortionScale) uniforms.distortionScale.value = 0.35;
+    if (uniforms.distortionScale) uniforms.distortionScale.value = 0.22;
     if (uniforms.size) uniforms.size.value = 1.5;
     if (uniforms.shallow) uniforms.shallow.value = new THREE.Color(PALETTE.waterShallow);
+    // The basin river is a saturated turquoise that stays blue against a pale
+    // sky: the reflection alone was washing it out to grey-white.
+    if (uniforms.shallowTint) uniforms.shallowTint.value.setHex(0x84cfe2);
+    if (uniforms.shoreTint) uniforms.shoreTint.value = 1;
+    if (uniforms.foam) uniforms.foam.value = new THREE.Color(0xf4fbff);
     if (uniforms.foam) uniforms.foam.value = new THREE.Color(0xffffff);
   }
 
@@ -290,10 +311,10 @@ export class StyleOverhaul {
         zenithColour: { value: new THREE.Color(PALETTE.skyUpper) },
         sunDir: { value: new THREE.Vector3(0.4, 0.6, 0.3) },
         sunColour: { value: new THREE.Color(PALETTE.sun) },
-        cloudLit: { value: new THREE.Color(0xfffdf8) },
-        cloudShade: { value: new THREE.Color(0x6b7d9c) },
+        cloudLit: { value: new THREE.Color(0xfff8f2) },
+        cloudShade: { value: new THREE.Color(0xd8b8b8) },
         cloudNoise: { value: makeCloudNoiseTexture(256) },
-        uCloudCover: { value: 0.5 },
+        uCloudCover: { value: 0.62 },
         uTime: { value: 0 },
       },
       vertexShader: `
@@ -317,12 +338,17 @@ export class StyleOverhaul {
         void main() {
           vec3 dir = normalize( vDir );
           float h = clamp( dir.y, -1.0, 1.0 );
-          vec3 colour = mix( horizonColour, zenithColour, smoothstep( -0.02, 0.62, h ) );
+          // The blue has to arrive within the top third of the frame: the camera
+          // sits on a hillside looking at the horizon, so a gradient that only
+          // turns blue overhead paints the whole sky one flat peach.
+          vec3 colour = mix( horizonColour, zenithColour, smoothstep( 0.0, 0.32, h ) );
 
+          // A thin streaked veil rather than cumulus: the reference sky is a
+          // pale wash, and heavy cloud detail competes with the rock.
           // Warm bloom around the sun, and a slightly warmer haze band low down.
           float sun = max( dot( dir, normalize( sunDir ) ), 0.0 );
-          colour += sunColour * pow( sun, 18.0 ) * 0.35;
-          colour = mix( colour, horizonColour, smoothstep( 0.18, -0.12, h ) * 0.55 );
+          colour += sunColour * pow( sun, 18.0 ) * 0.3;
+          colour = mix( colour, horizonColour, smoothstep( 0.16, -0.1, h ) * 0.42 );
 
           // Everything below the horizon is painted over by terrain, so skip
           // the cloud maths there: it is most of the dome, and noise is not
@@ -349,6 +375,9 @@ export class StyleOverhaul {
           // Dissolve into the haze band at the horizon rather than ending on a
           // hard cut above the ridge line.
           cover *= smoothstep( 0.004, 0.07, h );
+          // Wispy, not billowing: the sky is a pale wash and the rock is the
+          // subject. Heavy cloud detail only competes with the mesas.
+          cover *= 0.62;
 
           // Bright tops, cool bellies: density doubles as a height cue.
           float lit = 0.05 + 0.95 * smoothstep( 0.16, 0.52, density );

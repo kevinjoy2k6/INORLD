@@ -23,14 +23,20 @@ import * as THREE from 'three';
 export const STYLE_PRESETS = {
   GOLDEN_MEADOW: {
     label: 'GOLDEN MEADOW',
-    sunColour: '#fff0d4',
-    sunIntensity: 2.6,
-    skyColour: '#d8e2f0',
-    groundColour: '#e5b887',
-    hemiIntensity: 1.15,
+    sunColour: '#fff2d8',
+    sunIntensity: 1.35,
+    // The hemisphere's sky colour is what lights every up-facing surface in
+    // this renderer, so a cool blue sky tint turns the sand grey. Warm it: the
+    // dunes should read peach even where the sun is at a grazing angle.
+    skyColour: '#f0e2d4',
+    groundColour: '#f0c298',
+    // High-key light: the sun is barely stronger than the sky fill, so a rock
+    // face turned away from it stays pale sandstone instead of going black.
+    // Reference frames have no pixel darker than about #6d4a3f.
+    hemiIntensity: 1.18,
     fogDensity: 0.0042,
-    fogColour: '#fad6c8',
-    exposure: 1.08,
+    fogColour: '#edc9b7',
+    exposure: 0.95,
   },
   ALPINE_NOON: {
     label: 'ALPINE NOON',
@@ -81,7 +87,12 @@ export class OverlandStyle {
       // mapping shader chunk has no AgX branch: selecting it produces an
       // invalid program and the whole scene fails to draw. ACES filmic is the
       // supported wide-DR curve here, and the presets carry the look.
-      this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      // Not ACES. The whole look is flat pastel albedo, and ACES rolls a
+      // saturated peach straight into grey-white: measured on screen, the
+      // authored sky #fad6c8 came out #e1e1e1 and sunlit sandstone #d7670a.
+      // A linear curve keeps authored colours where the palette put them, so
+      // the grade below is the only thing shaping contrast.
+      this.renderer.toneMapping = THREE.LinearToneMapping;
       this.renderer.outputColorSpace = THREE.SRGBColorSpace;
       this.renderer.shadowMap.enabled = true;
       this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;

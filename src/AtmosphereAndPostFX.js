@@ -49,7 +49,10 @@ const PHASES = [
     id: 'golden',
     label: 'GOLDEN HOUR',
     t0: 0.25,
-    elevation: 13,
+    // 13 degrees lit the ground at 0.22 of full strength: every flat surface
+    // went brown while the cliff faces blazed. The reference sun sits high
+    // enough to light the whole basin evenly.
+    elevation: 42,
     azimuth: 205,
     sunColor: 0xffb266,
     sunIntensity: 3.1,
@@ -306,9 +309,9 @@ export class AtmosphereAndPostFX {
     this.grade = new ShaderPass({
       uniforms: {
         tDiffuse: { value: null },
-        saturation: { value: 1.28 },
-        contrast: { value: 1.16 },
-        lift: { value: 0.015 },
+        saturation: { value: 1.3 },
+        contrast: { value: 1.06 },
+        lift: { value: 0.04 },
         warm: { value: new THREE.Vector3(1.04, 1.0, 0.94) },
         cool: { value: new THREE.Vector3(0.93, 0.98, 1.09) },
       },
@@ -352,7 +355,9 @@ export class AtmosphereAndPostFX {
 
     this.composer.setSize(size.x, size.y);
     this._syncSharpenTexel();
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    // The palette is authored in display space, so the composer must not
+    // re-shape it: linear keeps the pastel rock pink instead of bleaching it.
+    this.renderer.toneMapping = THREE.LinearToneMapping;
   }
 
   /** One sharpen texel, in drawing-buffer pixels, so the radius holds at any DPR. */
@@ -813,8 +818,11 @@ export class AtmosphereAndPostFX {
     const heightFactor = THREE.MathUtils.clamp(1 - (camY - 4) / 90, 0.35, 1.4);
     const reveal = this.missionManager ? this.missionManager.discovered.size : 0;
     let density = this.baseFogDensity * (this.fogScale ?? 1) * heightFactor * (1 - reveal * 0.1);
-    // Keep the draw-distance cut in the murk instead of a visible wall.
-    if (this.viewDistance) density = Math.max(density, 1.45 / this.viewDistance);
+    // Keep the draw-distance cut in the murk instead of a visible wall. The
+    // floor has to stay below the authored haze or it becomes the whole look:
+    // at 1.45 / 350 m the valley disappeared into a white sheet at 200 m, with
+    // haze thick enough to erase every ridge and every mesa behind them.
+    if (this.viewDistance) density = Math.max(density, 0.6 / this.viewDistance);
     if (this.weatherMode === 'snow') density *= 1.3;
     this.scene.fog.density = density;
     if (this.weatherMode === 'snow') {

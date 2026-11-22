@@ -144,6 +144,7 @@ a contract.
 | `Landmarks.js` | 417 | `Landmarks`: poles, centre lines, signs, gas stations, DOM notices |
 | `LandmarkModels.js` | 505 | `createStoneMaterials`, `assemble`, `castleTower`, `castleGate`, `ruinedWall`, `ruinStump`, `cairnGeometries`, `waymarker` — modular low-poly stonework |
 | `PointsOfInterest.js` | 400 | `PointsOfInterest`: keeps on the watchtower sites, river gatehouse, ruin fields, trail cairns and signposts |
+| `MesaField.js` | ~610 | `MesaField`: terraced buttes/massifs, palm oases on the river, instanced desert scrub — the red-rock country's relief without touching the heightfield |
 | `MissionManager.js` | 611 | `MissionManager`: watchtower scouting, timber hauling, bridge reconstruction |
 | `WinchSystem.js` | 541 | `WinchSystem`: static anchors, truck-to-truck rescue, fuel transfer |
 | `NetworkManager.js` | 1180 | `STUN_SERVERS`, `MAX_PEERS`, `makeRoomCode`, `normaliseRoomCode`, `roomCodeToPeerId`, `isPeerIdValidForRoom`, `vehicleSnapshot`, `NetworkManager` |
@@ -223,7 +224,9 @@ All of this is top-level in `src/main.js`; the module uses top-level `await`.
 16. **NetworkManager**, **WinchSystem**, rescue beacon group, **MissionManager**
     (`setup()`), then cross-wire `networkManager.winchSystem/missionManager`.
     Immediately after `setToaster()`: **`new PointsOfInterest({ scene, terrain, missionManager })`**
-    (`window.__poi`), which dresses the mission zones in architecture.
+    (`window.__poi`), which dresses the mission zones in architecture, then
+    **`new MesaField({ scene, terrain, world })`** (`window.__mesa`), which adds
+    the buttes, palms and scrub.
 17. **CameraController**, input collections (`keys`, `held`), **UIManager**
     (`ui.setNetworkCallbacks()`), `toast()`.
 18. **AtmosphereAndPostFX** (`atmosphere.setQuality(...)`, `fogScale = 0.34`),
@@ -561,9 +564,13 @@ on the truck only (`thickness 1.022`, `0x1c1a20`), region palette grading per
 frame (`fog.color`, hemisphere colour, bloom strength, tone exposure).
 `StyleOverhaul`: flat albedo palette, matte materials, distance + height fog
 written as literal patches, water as a depth colour ramp.
-`OverlandStyle`: AgX tone mapping, four presets
+`OverlandStyle`: linear tone mapping, four presets
 (`GOLDEN_MEADOW`, `ALPINE_NOON`, `ALPENGLOW_SUNSET`, `STORM_CONVOY`) cycling with
-`Y`, global `wetness` / `snowLine` uniforms.
+`Y`, global `wetness` / `snowLine` uniforms. Tone mapping is **`LinearToneMapping`,
+not ACES**: the palette is authored in display space and ACES turned an authored
+sky `#fad6c8` into `#e1e1e1` on screen. Lighting is deliberately high-key
+(`sunIntensity 1.35`, `hemiIntensity 1.18`) so a face turned away from the sun
+stays pale stone instead of going black.
 
 ---
 
@@ -671,6 +678,50 @@ Rules that keep it cheap and safe:
   ±36 m) instead of drowning.
 - Builders bake transforms into geometry and leave the group at the origin, so
   `assemble()` can merge freely. Keep that convention when adding a model.
+
+### 9.6 Red-rock country (`MesaField`)
+
+`TerrainSystem` owns the drivable ground, and its vertical scale is fixed by
+physics: 4.9 m cells, graded corridors, a carved river and trails that must stay
+under `TRAIL_MAX_GRADE`. A 90 m butte is therefore **scenery**, not heightfield.
+`MesaField` supplies the relief the heightfield cannot afford.
+
+| Set | How | Count (default seed) |
+| --- | --- | --- |
+| Massifs | 9 clusters of 2–4 overlapping buttes; the first 5 clusters are pinned 70–150 m off the river | ~30 buttes |
+| Hero buttes | 4 large walls 95–165 m off the river, radius 34–60, height 55–95 | 4 |
+| Lone mesas | rejection-sampled across the canyon region | ~14 |
+| Palm oases | 5 river-bank hearts, plus loose palms following both banks | ~117 palms |
+| Scrub | one `InstancedMesh` of faceted icosahedra, clumped by noise | up to 1500 |
+
+Rules:
+
+- **Three merged meshes plus one instanced mesh.** Every butte, block and talus
+  triangle goes into one `TriangleSoup`; trunk rings and frond ribbons each go
+  into their own; the scrub is instanced. Total cost is ~11.8k stone triangles
+  and four draw calls.
+- **Non-indexed geometry on purpose.** `computeVertexNormals()` on a non-indexed
+  soup gives one normal per face — that is the hard low-poly facet. Do not merge
+  or index it.
+- **Strata are vertex colours**, `STRATA` bottom to top from oxidised red to
+  pale caprock, with a per-face `shade()` jitter so two quads of the same band
+  still separate.
+- **Profile is a wall, not a cone.** Rings alternate a barely-overhanging ledge
+  and a near-vertical face (`shrink 0.18`); a strong lip reads as stacked
+  pancakes. About one ring in three is a wide bench.
+- **The talus apron follows the ground.** `appendMesa` takes a `groundAt(x, z)`
+  callback and drops each outer skirt vertex onto the terrain; a flat skirt ring
+  floats above falling ground like a plate under the rock.
+- **Placement is water- and road-aware.** `_canPlaceMesa` rejects wet cells,
+  ground below `waterLevel + 1.2`, a corridor narrower than `18 + radius × 0.55`
+  from any graded trail, and the proving ground. Palms additionally keep 5 m off
+  trails.
+- **Colliders:** each butte gets one oversized static box (radius × 0.78), each
+  palm a thin trunk box, all in `PHYS_GROUPS.GROUND`. Rubble blocks are scenery
+  only; the scrub has none.
+- **No state.** The layer is built once, in the constructor, from the terrain's
+  own height grid and river curve; it never updates per frame and co-op clients
+  agree because the seed and the terrain are deterministic.
 
 ---
 
@@ -939,9 +990,9 @@ One `AudioContext`, one bus tree (`engine`, `drivetrain`, `tyres`, `mechanical`,
   `celShadeProps([roots])` return the count of converted materials.
 - `StyleOverhaul` — `PALETTE`, `applyStylePalette()` (runs **before** terrain so
   vertex colours pick it up), flat matte materials, dual-layer fog, water ramp.
-- `OverlandStyle` — AgX tone mapping, four presets
-  (`GOLDEN_MEADOW`, `ALPINE_NOON`, `ALPENGLOW_SUNSET`, `STORM_CONVOY`) cycled with
-  `Y`, global `wetness`/`snowLine` uniforms for material factories.
+- `OverlandStyle` — linear tone mapping (ACES is wrong for this palette), four
+  presets (`GOLDEN_MEADOW`, `ALPINE_NOON`, `ALPENGLOW_SUNSET`, `STORM_CONVOY`)
+  cycled with `Y`, global `wetness`/`snowLine` uniforms for material factories.
 
 Order matters: palette → terrain build → materials → toon pass → atmosphere.
 
@@ -1066,6 +1117,7 @@ frame, so read the stats after a render or via `captureRenderStats`.
 | `071c117` | audit fixes: unreachable timber key → `M`, truthful lobby legend, co-op failures no longer fatal (plus null-safe legacy net helpers), typing/menu input guards, WebGL context-loss message, audio context suspended with a hidden tab |
 | `f23f0a2` | gameplay: `MissionManager.nextObjective()` + HUD **NEXT** distance row, driver-assist prompts for rollover, being bogged and a dry tank |
 | `9eeb085` | landmarks: `LandmarkModels` + `PointsOfInterest` — castle keeps on the watchtower sites, gatehouse and curtain walls at the river crossing, three ruin fields, 132 trail cairns and named trailhead signposts; whole layer baked to 17 meshes / 24.5k triangles |
+| red-rock country | **`MesaField`**: terraced buttes/massifs, palm oases and instanced scrub baked to 4 draw calls / ~11.8k stone triangles; fog floor `1.45 / viewDistance` → `0.6 / viewDistance` (the floor, not the authored haze, was whitewashing the valley); ACES → `LinearToneMapping`; high-key sun/hemisphere; canyon ground retinted to sun-bleached sand; water pulled toward its own colour so the river stays turquoise against a pale sky |
 | low-poly/sharp | **low-poly + crisp pass**: nine-tap unsharp-mask `ShaderPass` (strength 0.9, contrast-gated) after the grade, bloom strength cut across all phases and region palettes (0.34 → 0.16 max) with a 0.32 radius, grade contrast 1.1 → 1.16, five-sided trunks/poles, six-sided pines, 20-facet boulders, all flat-shaded |
 
 Earlier work still in force: 150 m chunked props with distance LOD and far proxies,

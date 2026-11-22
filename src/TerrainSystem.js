@@ -1213,9 +1213,14 @@ export class TerrainSystem {
         // flat ochre field; with it the ground reads as grassland with damp
         // hollows, in two flat tone bands rather than a gradient.
         if (key !== 'water' && key !== 'mud' && key !== 'snow' && key !== 'trail') {
+          // In the red-rock country the ground stays sand and the green lives
+          // in the scrub, so the patch blend is softer and warmer there.
+          const canyon = region.id === 'canyon';
           const patch = this.noiseD(x * 0.012 + 40, z * 0.012 - 15);
           const green = THREE.MathUtils.clamp((patch + 0.22) * 1.9, 0, 1);
-          if (green > 0) color.lerp(tint.setHex(0x6f8d43), green * 0.5);
+          if (green > 0) {
+            color.lerp(tint.setHex(canyon ? 0x8a9a53 : 0x6f8d43), green * (canyon ? 0.24 : 0.5));
+          }
         }
 
         // Wet sheen on the riverbed and bog floor.
@@ -1669,7 +1674,7 @@ export class TerrainSystem {
 
     const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x4a3a28, roughness: 0.95, flatShading: true });
     const pineMaterial = new THREE.MeshStandardMaterial({ color: 0x2c4a32, roughness: 0.9, flatShading: true });
-    const boulderMaterial = new THREE.MeshStandardMaterial({ color: 0x6a6259, roughness: 0.94, flatShading: true });
+    const boulderMaterial = new THREE.MeshStandardMaterial({ color: 0x9c8571, roughness: 0.94, flatShading: true });
     const poleMaterial = new THREE.MeshStandardMaterial({ color: 0x6d5433, roughness: 0.9, flatShading: true });
 
     // Counts scale with the map area, or 2 km reads as an empty plain.

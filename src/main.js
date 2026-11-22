@@ -19,6 +19,7 @@ import { ExpeditionHUD } from './ExpeditionHUD.js';
 import { ACCESSORIES, ACCESSORY_ORDER, PAINT_COLORS, PAINT_ORDER } from './VehicleMeshBuilder.js';
 import { Landmarks } from './Landmarks.js';
 import { PointsOfInterest } from './PointsOfInterest.js';
+import { MesaField } from './MesaField.js';
 import { StyleDNA } from './StyleDNA.js';
 import { WaterSystem } from './WaterSystem.js';
 import { StyleOverhaul, applyStylePalette } from './StyleOverhaul.js';
@@ -479,6 +480,12 @@ missionManager.setToaster(toast);
 // because it wraps their abstracts in architecture.
 const pointsOfInterest = new PointsOfInterest({ scene, terrain, missionManager });
 window.__poi = pointsOfInterest;
+
+// The red-rock country itself: terraced buttes, palm oases on the river and
+// scrub on the flats. Scenery only — the heightfield and its physics are
+// untouched, so every trail still grades and every ford still crosses.
+const mesaField = new MesaField({ scene, terrain, world });
+window.__mesa = mesaField;
 
 // Wire the cross-references so state-change notifications flow.
 networkManager.winchSystem = winchSystem;

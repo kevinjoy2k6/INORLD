@@ -194,7 +194,7 @@ export class WaterSystem {
         outgoingLight = mix( outgoingLight, shallowTint, shallow * 0.42 * shoreTint );
 
         float ripple = 0.5 + 0.5 * sin( depth * 18.0 - time * 1.6 + surfaceNormal.x * 4.0 );
-        float foam = ( 1.0 - smoothstep( 0.0, 0.45, depth ) ) * step( 0.55, ripple ) * shoreTint;
+        float foam = ( 1.0 - smoothstep( 0.0, 0.32, depth ) ) * step( 0.72, ripple ) * shoreTint;
         outgoingLight = mix( outgoingLight, foamColour, foam );
 
         float alphaOut = mix( 0.58, alpha, smoothstep( 0.0, 1.2, depth ) );
