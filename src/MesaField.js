@@ -531,7 +531,10 @@ export class MesaField {
 
     const addPalm = (x, z, scale) => {
       if (this._wet(x, z)) return false;
-      if (this._trailDistance(x, z) < 5) return false;
+      // Palms lean out about a crown-width, and the camera rides a few metres
+      // behind the truck: keep the groves clear of the driving line so a frond
+      // never fills the screen on the way past.
+      if (this._trailDistance(x, z) < 10) return false;
       const y = this._height(x, z) - 0.2;
       const lean = random() * Math.PI * 2;
       appendPalm(trunkSoup, random, { x, y, z, scale, lean });
