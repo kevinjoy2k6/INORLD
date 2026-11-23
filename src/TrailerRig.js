@@ -22,10 +22,26 @@ const TRAILER = {
   maxCompression: 0.18,
   maxDroop: 0.08,
   springStiffness: 72000,
+  antiRollStiffness: 16000,
   dampingCompression: 3600,
   dampingRebound: 4600,
-  lateralStiffness: 0.72,
+  // Cornering stiffness in force-per-radian-of-slip, not force-per-m/s of
+  // sideways drift. A metre per second of lateral drift is a 3 degree slip
+  // angle at 20 m/s but a 45 degree one at 2 m/s, and a trailer that reads it
+  // as 3 degrees at every speed holds full lateral grip round every bend: the
+  // drawbar then sees tens of kilonewtons and the rig folds.
+  corneringStiffness: 9,
   parkingBrakeDamping: 5200,
+  // Overrun brakes: the drawbar pushes a slave cylinder when the truck slows,
+  // so the trailer brakes itself instead of shoving 3.4 t into the ball.
+  brakeGain: 0.62,
+  brakeLag: 12,
+  // The coupling is not frictionless. A dry ball joint drags, and that drag is
+  // what stops a light truck being steered from behind by its own trailer.
+  yawDamping: 20000,
+  jackknifeAngle: 1.22,
+  jackknifeStiffness: 30000,
+  maxAngularVelocity: 6,
   hitchLocal: { x: 0, y: -0.24, z: 2.72 },
   wheelOffsets: [
     { id: 'TL', x: -0.92, z: 1.15 },
@@ -53,7 +69,15 @@ export class TrailerRig {
 
     this.suspLen = new Float32Array(4).fill(TRAILER.restLength);
     this.prevLen = new Float32Array(4).fill(TRAILER.restLength);
+    this.smoothLen = new Float32Array(4).fill(TRAILER.restLength);
+    this.dampVel = new Float32Array(4);
+    this.springForce = new Float32Array(4);
+    this.arbForce = new Float32Array(4);
     this.comp = new Float32Array(4);
+    this.brake = 0;
+    this.relYaw = 0;
+    this.relYawRate = 0;
+    this._prevRelYaw = 0;
     this.load = new Float32Array(4).fill((TRAILER.massEmpty * 9.82) / 4);
     this.grounded = [false, false, false, false];
     this.wheelSurface = [SURFACES.hardpack, SURFACES.hardpack, SURFACES.hardpack, SURFACES.hardpack];
@@ -304,6 +328,7 @@ export class TrailerRig {
     this.world.addConstraint(this.constraint);
     this.hitched = true;
     this._prevPos.set(this.body.position.x, this.body.position.y, this.body.position.z);
+    this._prevRelYaw = 0;
     return { ok: true, message: 'Trailer hitched' };
   }
 
@@ -312,6 +337,9 @@ export class TrailerRig {
     this.world.removeConstraint(this.constraint);
     this.constraint = null;
     this.hitched = false;
+    this.brake = 0;
+    this.relYaw = 0;
+    this.relYawRate = 0;
     return { ok: true, message: 'Trailer released' };
   }
 
@@ -340,7 +368,15 @@ export class TrailerRig {
     this.body.velocity.set(0, 0, 0);
     this.body.angularVelocity.set(0, 0, 0);
     this.suspLen.fill(TRAILER.restLength);
+    this.smoothLen.fill(TRAILER.restLength);
+    this.dampVel.fill(0);
+    this.springForce.fill(0);
+    this.arbForce.fill(0);
     this.comp.fill(0);
+    this.brake = 0;
+    this.relYaw = 0;
+    this.relYawRate = 0;
+    this._prevRelYaw = 0;
     // See OffroadVehicle.reset(): a teleport must refresh the cached AABB.
     this.body.aabbNeedsUpdate = true;
     this._prevPos.set(this.spawn.x, this.spawn.y, this.spawn.z);
@@ -371,6 +407,11 @@ export class TrailerRig {
     body.quaternion.vmult(new CANNON.Vec3(0, 1, 0), up);
     const down = new CANNON.Vec3(-up.x, -up.y, -up.z);
 
+    // Overrun brakes work off the truck's pedal with a short lag: the drawbar
+    // has to travel before the trailer's shoes touch.
+    const pedal = this.hitched ? this.vehicle.brakeInput || 0 : 0;
+    this.brake += (pedal - this.brake) * Math.min(1, dt * TRAILER.brakeLag);
+
     const rayLength = TRAILER.restLength + TRAILER.maxDroop + TRAILER.wheelRadius + 0.06;
     const minLen = TRAILER.restLength - TRAILER.maxCompression;
     const maxLen = TRAILER.restLength + TRAILER.maxDroop;
@@ -392,6 +433,7 @@ export class TrailerRig {
       const hit = this.world.raycastClosest(attach, rayEnd, this.rayOptions, this.rayResult);
 
       if (!hit) {
+        this.springForce[i] = 0;
         this.grounded[i] = false;
         this.suspLen[i] = maxLen;
         this.comp[i] = -TRAILER.maxDroop;
@@ -417,17 +459,58 @@ export class TrailerRig {
       this.suspLen[i] = length;
       this.comp[i] = TRAILER.restLength - length;
 
-      const compressionVelocity = this._firstStep ? 0 : (this.prevLen[i] - length) / dt;
-      const damping = compressionVelocity > 0 ? TRAILER.dampingCompression : TRAILER.dampingRebound;
-      const force = Math.max(0, TRAILER.springStiffness * this.comp[i] + damping * compressionVelocity);
+      // The same two filters the truck runs: ray length at ~18 Hz, shaft speed
+      // at ~30 Hz. The trailer carries twice the truck's spring rate over a
+      // shorter stroke, so one unfiltered 3 cm facet step became a 20 kN kick
+      // that the ball joint handed straight to the truck's rear axle.
+      this.smoothLen[i] += (length - this.smoothLen[i]) * Math.min(1, dt * 18);
+      const smoothComp = TRAILER.restLength - this.smoothLen[i];
+      const rawVel = this._firstStep ? 0 : (this.prevLen[i] - length) / dt;
+      this.dampVel[i] += (clamp(rawVel, -2.2, 2.2) - this.dampVel[i]) * Math.min(1, dt * 30);
+      const damping = this.dampVel[i] > 0 ? TRAILER.dampingCompression : TRAILER.dampingRebound;
+      // The same generous corner ceiling as the truck: a strut can briefly
+      // carry several times its static share while the trailer leans; capping
+      // near the static share suppresses that load transfer and unloads the
+      // inside tyres in a slalom.
+      const cornerCeiling = this.body.mass * 9.82 * 1.15;
+      const force = clamp(
+        TRAILER.springStiffness * smoothComp + damping * this.dampVel[i],
+        0,
+        cornerCeiling,
+      );
 
+      this.springForce[i] = force;
       this.prevLen[i] = length;
       this.load[i] = force;
       this.grounded[i] = true;
       this.contactNormal[i].set(normal.x, normal.y, normal.z);
       this.contactPoint[i].set(result.hitPointWorld.x, result.hitPointWorld.y, result.hitPointWorld.z);
+    }
+    // Anti-roll bars, with the same sign and clamping rules as the truck:
+    // lift the compressed corner, limit the bar itself rather than the total
+    // corner support, and read smoothed travel instead of the raw ray.
+    this.arbForce.fill(0);
+    const smoothComp = (i) => TRAILER.restLength - this.smoothLen[i];
+    if (this.grounded[0] && this.grounded[1]) {
+      const diff = smoothComp(0) - smoothComp(1);
+      this.arbForce[0] = TRAILER.antiRollStiffness * diff;
+      this.arbForce[1] = -TRAILER.antiRollStiffness * diff;
+    }
+    if (this.grounded[2] && this.grounded[3]) {
+      const diff = smoothComp(2) - smoothComp(3);
+      this.arbForce[2] = TRAILER.antiRollStiffness * diff;
+      this.arbForce[3] = -TRAILER.antiRollStiffness * diff;
+    }
+    const springCeiling = this.body.mass * 9.82 * 1.15;
+    const arbLimit = this.body.mass * 9.82 * 0.45;
+    for (let i = 0; i < 4; i += 1) {
+      if (!this.grounded[i]) continue;
+      const offset = TRAILER.wheelOffsets[i];
+      const arb = clamp(this.arbForce[i], -arbLimit, arbLimit);
+      const total = clamp(this.springForce[i] + arb, 0, springCeiling);
+      this.load[i] = total;
       body.applyLocalForce(
-        new CANNON.Vec3(0, force, 0),
+        new CANNON.Vec3(0, total, 0),
         new CANNON.Vec3(offset.x, TRAILER.attachY, offset.z),
       );
     }
@@ -457,11 +540,32 @@ export class TrailerRig {
       const surface = this._surfaceOf(i);
       const cap = surface.grip * this.load[i];
 
-      let forceLong = -Math.sign(vLong) * surface.rollResistance * this.load[i];
-      if (!this.hitched) forceLong -= vLong * TRAILER.parkingBrakeDamping;
+      let forceLong = 0;
+      if (Math.abs(vLong) > 0.05) {
+        forceLong = -Math.sign(vLong) * surface.rollResistance * this.load[i];
+        if (!this.hitched) {
+          forceLong -= vLong * TRAILER.parkingBrakeDamping;
+        } else if (this.brake > 0.01) {
+          // Overrun brakes: the pedal pushes a slave cylinder in the drawbar.
+          // Without them the trailer only ever coasted on rolling resistance,
+          // so a panic stop was 3.4 t shoving the truck's rear axle sideways.
+          forceLong -= Math.sign(vLong) * this.brake * TRAILER.brakeGain * cap;
+        }
+      }
       forceLong = clamp(forceLong, -cap, cap);
 
-      const forceLat = -clamp(vLat * TRAILER.lateralStiffness, -1, 1) * cap;
+      const speedRef = Math.max(Math.abs(vLong), 2);
+      const slipAngle = Math.atan2(vLat, speedRef);
+      let forceLat = -clamp(slipAngle * TRAILER.corneringStiffness, -1, 1) * cap;
+
+      // Friction is a single budget per contact; a tyre cannot pull sideways at
+      // full grip and brake at full grip at the same time.
+      const magnitude = Math.hypot(forceLong, forceLat);
+      if (magnitude > cap && magnitude > 1e-6) {
+        const scale = cap / magnitude;
+        forceLong *= scale;
+        forceLat *= scale;
+      }
 
       const relative = new CANNON.Vec3(
         contact.x - body.position.x,
@@ -476,6 +580,58 @@ export class TrailerRig {
         ),
         relative,
       );
+    }
+
+    this._updateCoupling(dt);
+  }
+
+  /**
+   * Ball-joint friction and the physical jackknife stop.
+   *
+   * A bare PointToPointConstraint leaves the trailer free to yaw, which is
+   * correct for a coupling but not for the whole joint: the truck's rear tyres
+   * steer the trailer, and the trailer steers them straight back. With no drag
+   * in the joint that loop had no damping at all, and the rig folded to 149
+   * degrees under braking and 180 in a slalom. A dry ball does drag, so a
+   * yaw damper is the honest model; the stop at ~70 degrees is the A-frame
+   * meeting the bumper, which is what ends a real jackknife.
+   */
+  _updateCoupling(dt) {
+    if (!this.hitched) {
+      this.relYaw = 0;
+      this.relYawRate = 0;
+      return;
+    }
+
+    const vf = this.vehicle.body.quaternion.vmult(new CANNON.Vec3(0, 0, 1));
+    const tf = this.body.quaternion.vmult(new CANNON.Vec3(0, 0, 1));
+    // Positive `rel` here means the trailer sits clockwise of the truck (a
+    // rotation about +Y moves the body the other way), which is why the damping
+    // torque below carries the sign it does. Getting this backwards turns the
+    // joint into a positive-feedback loop that folds the rig to 180 degrees in
+    // a slalom, which is exactly what the first version did.
+    const rel = Math.atan2(vf.x * tf.z - vf.z * tf.x, vf.x * tf.x + vf.z * tf.z);
+    const rate = clamp((rel - this._prevRelYaw) / dt, -8, 8);
+    this.relYaw = rel;
+    this.relYawRate = rate;
+    this._prevRelYaw = rel;
+
+    let torque = TRAILER.yawDamping * rate;
+    const over = Math.abs(rel) - TRAILER.jackknifeAngle;
+    if (over > 0) {
+      torque += Math.sign(rel) * TRAILER.jackknifeStiffness * over;
+      // Bleed the approach rate too, or the stop is a step function.
+      torque += Math.sign(rel) * TRAILER.yawDamping * rate * Math.min(1, over * 4);
+    }
+
+    // Equal and opposite: the drawbar twists the truck as much as the truck
+    // twists the trailer, and neither gains angular momentum from the joint.
+    this.body.applyTorque(new CANNON.Vec3(0, torque, 0));
+    this.vehicle.body.applyTorque(new CANNON.Vec3(0, -torque, 0));
+
+    const spin = this.body.angularVelocity.length();
+    if (spin > TRAILER.maxAngularVelocity) {
+      this.body.angularVelocity.scale(TRAILER.maxAngularVelocity / spin, this.body.angularVelocity);
     }
   }
 
@@ -515,6 +671,8 @@ export class TrailerRig {
       mass: this.body.mass,
       grounded: this.grounded.filter(Boolean).length,
       compression: Array.from(this.comp),
+      brake: this.brake,
+      relYaw: this.relYaw,
     };
   }
 }
