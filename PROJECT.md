@@ -778,11 +778,32 @@ but never the body that starts it.
 | `steerRate` | 3.4 | `finalDrive` | 4.1 |
 | `drivetrainEfficiency` | 0.88 | `idleRpm` / `maxRpm` | 780 / 4400 |
 | `maxBrakeTorque` | 2400 | `handbrakeTorque` | 3600 |
-| `slipStiffness` | 6.2 | `lateralStiffness` | 0.62 |
+| `slipStiffness` | 6.2 | `lateralStiffness` | 1.3 |
 | `tankCapacity` | 80 L | PSI | 8–35, ref 20 |
+| `maxAngularVelocity` | 6 rad/s | | |
 
 Torque is a 4.2 L turbo-diesel curve interpolated by `torqueAtRpm(rpm)`; throttle
 ramps in 0.55 s so it feels turbo-diesel rather than instant.
+
+**Suspension force model — three rules that are easy to break:**
+
+1. **The anti-roll bar lifts the compressed corner.** `arbForce[i] = +k ·
+   (compᵢ − comp_opposite)` for the compressed side, negative for the extended
+   one. The reversed sign is not a subtle handling preference: it feeds roll
+   instead of damping it. Measured, a truck parked across a 23° sidehill went
+   onto its roof in 4 s; with the sign correct it settles at 24.5° and stays
+   there.
+2. **Clamp the bar, not the corner.** Each corner's *total* support ceiling is
+   the strut ceiling (`1.15 × weight`); only the ARB term is limited to `0.45 ×
+   weight`. Capping the total at 0.45 W meant two wheels could carry at most
+   90 % of the truck, so any time the uphill pair unloaded the body had to fall.
+3. **Filter before damping.** The damper reads a low-passed shaft speed
+   (`dampVel`, ~30 Hz) from the raw ray length. Raw frame-to-frame length on
+   this faceted terrain stepped a 3 cm facet into a 2.2 m/s spike and 10 kN on
+   one corner.
+
+The bar and the spring use *smoothed* travel (`smoothLen`), never `comp`, which
+is the raw ray and therefore full of facet steps.
 
 ### 10.3 Gears
 
@@ -1156,6 +1177,7 @@ frame, so read the stats after a render or via `captureRenderStats`.
 | `f23f0a2` | gameplay: `MissionManager.nextObjective()` + HUD **NEXT** distance row, driver-assist prompts for rollover, being bogged and a dry tank |
 | `9eeb085` | landmarks: `LandmarkModels` + `PointsOfInterest` — castle keeps on the watchtower sites, gatehouse and curtain walls at the river crossing, three ruin fields, 132 trail cairns and named trailhead signposts; whole layer baked to 17 meshes / 24.5k triangles |
 | red-rock country | **`MesaField`**: terraced buttes/massifs, palm oases and instanced scrub baked to 4 draw calls / ~11.8k stone triangles; fog floor `1.45 / viewDistance` → `0.6 / viewDistance` (the floor, not the authored haze, was whitewashing the valley); ACES → `LinearToneMapping`; high-key sun/hemisphere; canyon ground retinted to sun-bleached sand; water pulled toward its own colour so the river stays turquoise against a pale sky |
+| car stability | **suspension solver fixes**: anti-roll bar sign corrected (it was adding roll — a truck parked across a 23° sidehill rolled onto its roof in 4 s, now holds at 24.5° indefinitely), per-corner support clamp raised from `0.45 W` total to the `1.15 W` strut ceiling (two wheels could previously carry only 90 % of the truck), ARB taken from smoothed travel instead of the raw ray, damper shaft speed low-passed at ~30 Hz, lateral stiffness 0.62 → 1.3 (sidehill creep 1.6 → 0.6 m/s), 6 rad/s angular-velocity clamp against solver artefacts. Corner body roll in a 0.85-lock slalom 29° → 17.3°, rough-ground roll 6.2° → 3.3°, top speed and rest jitter unchanged |
 | low-quality path | **desert read without the grade**: fog floor `0.6 / viewDistance` → `0.6 / Math.max(viewDistance, 240)` (at 130 m the old value fogged the mesas to 85% haze by 200 m); palette albedo saturation ×1.15 via `saturate()` in `applyStylePalette` with grade saturation 1.3 → 1.2 — graded frame unchanged (canyon chroma 94.5 → 96.0), ungraded frame +13% chroma (70.2 → 79.4) at the governor's 0.4 pixel ratio |
 | phase audit | **every region × every phase checked under linear tone mapping**: presets no longer latch over the clock (night used to render as golden hour), `PHASES` retuned for a linear curve (golden high-key reference, ambient-dominant overcast with turbidity 16 / Rayleigh 0.5, moonlit night, 9° dawn), sky dome follows `phaseId` via `SKY_PHASES`, night water dimmed to a few percent in linear space, region grading made a stable weight (night `0.02`), alpine snow albedo `0xeef2f5` → `0xdfe8f0` with rock painted onto steep faces, coast/alpine ground tints warmed/cooled to match their regions |
 | low-poly/sharp | **low-poly + crisp pass**: nine-tap unsharp-mask `ShaderPass` (strength 0.9, contrast-gated) after the grade, bloom strength cut across all phases and region palettes (0.34 → 0.16 max) with a 0.32 radius, grade contrast 1.1 → 1.16, five-sided trunks/poles, six-sided pines, 20-facet boulders, all flat-shaded |

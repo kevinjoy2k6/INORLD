@@ -176,7 +176,14 @@ const TUNE = {
   maxBrakeTorque: 2400,
   handbrakeTorque: 3600,
   slipStiffness: 6.2,
-  lateralStiffness: 0.62,
+  // Lateral force is a damper on sideways velocity, so it can only hold a
+  // sidehill once the truck is already creeping. At 0.62 that creep settled at
+  // ~1.6 m/s; 1.3 halves it without touching the cornering limit (the force is
+  // capped by grip either way).
+  lateralStiffness: 1.3,
+  // A rollover is under 2 rad/s. Anything past this is a solver artefact from a
+  // single bad contact, and letting it through is how a curb becomes a flip.
+  maxAngularVelocity: 6,
   minPsi: PSI_RANGE.min,
   maxPsi: PSI_RANGE.max,
   tireRefPsi: PSI_RANGE.ref,
@@ -242,6 +249,9 @@ export class OffroadVehicle {
     // thousands-of-newtons spike and the truck bucks.
     this.smoothLen = new Float32Array(4).fill(TUNE.restLength);
     this.arbForce = new Float32Array(4);
+    // Damper shaft speed, low-passed: the raw frame-to-frame length delta spikes
+    // at every facet edge on this low-poly terrain.
+    this.dampVel = new Float32Array(4);
     this.load = new Float32Array(4).fill((TUNE.chassisMass * 9.82) / 4);
     this.omega = new Float32Array(4);
     this.slip = new Float32Array(4);
@@ -504,6 +514,17 @@ export class OffroadVehicle {
     }
 
     this.speed = Math.hypot(this.body.velocity.x, this.body.velocity.z);
+
+    // Safety net for the rigid body as a whole. Suspension and contact forces
+    // are capped individually, but a bad frame can still hand the solver a
+    // torque impulse; an unbounded spin is unrecoverable, a clamped one settles.
+    const av = this.body.angularVelocity;
+    const spin = Math.hypot(av.x, av.y, av.z);
+    if (spin > TUNE.maxAngularVelocity) {
+      const scale = TUNE.maxAngularVelocity / spin;
+      av.x *= scale; av.y *= scale; av.z *= scale;
+    }
+
     this._firstStep = false;
   }
 
@@ -717,11 +738,13 @@ export class OffroadVehicle {
       this.smoothLen[i] += (length - this.smoothLen[i]) * Math.min(1, dt * 18);
       const smoothComp = TUNE.restLength - this.smoothLen[i];
 
-      let compressionVelocity = this._firstStep ? 0 : (this.prevLen[i] - length) / dt;
-      // A damper that sees a 60 cm step in one frame produces an absurd force.
-      // Real shock absorbers are velocity-limited by their valving; clamp to a
-      // plausible 2.2 m/s of shaft speed.
-      compressionVelocity = clamp(compressionVelocity, -2.2, 2.2);
+      // Shaft speed from the raw ray, low-passed at ~30 Hz. The raw delta is
+      // right for a real bump but spikes at every facet edge; left alone it
+      // slammed the damper into its ceiling (10 kN on one corner) over ground
+      // this low-poly. Filtering keeps the bump response and drops the spikes.
+      const rawVel = this._firstStep ? 0 : (this.prevLen[i] - length) / dt;
+      this.dampVel[i] += (clamp(rawVel, -2.2, 2.2) - this.dampVel[i]) * Math.min(1, dt * 30);
+      let compressionVelocity = this.dampVel[i];
       const damping = compressionVelocity > 0 ? TUNE.dampingCompression : TUNE.dampingRebound;
       const force = TUNE.springStiffness * smoothComp + damping * compressionVelocity;
 
@@ -743,23 +766,36 @@ export class OffroadVehicle {
       sinkTotal += this.sink[i];
     }
 
-    /* --- anti-roll bars: transfer load from the loaded side to the light side --- */
+    /* --- anti-roll bars: resist roll by lifting the compressed side --- */
+    // The sign matters more than the stiffness. A compressed corner has to be
+    // pushed UP (and the extended one down) to produce a righting moment; the
+    // old code did the opposite, so the bars fed roll instead of damping it and
+    // a truck parked across a 23 degree sidehill lay down on its roof in four
+    // seconds. The difference is also taken from the smoothed compression, not
+    // the raw ray: facet edges are 3 cm steps and were being read as roll.
     this.arbForce.fill(0);
+    const smoothComp = (i) => TUNE.restLength - this.smoothLen[i];
     if (this.grounded[0] && this.grounded[1]) {
-      const diff = this.comp[0] - this.comp[1];
-      this.arbForce[0] = -TUNE.antiRollStiffness * diff;
-      this.arbForce[1] = TUNE.antiRollStiffness * diff;
+      const diff = smoothComp(0) - smoothComp(1);
+      this.arbForce[0] = TUNE.antiRollStiffness * diff;
+      this.arbForce[1] = -TUNE.antiRollStiffness * diff;
     }
     if (this.grounded[2] && this.grounded[3]) {
-      const diff = this.comp[2] - this.comp[3];
-      this.arbForce[2] = -TUNE.antiRollStiffness * diff;
-      this.arbForce[3] = TUNE.antiRollStiffness * diff;
+      const diff = smoothComp(2) - smoothComp(3);
+      this.arbForce[2] = TUNE.antiRollStiffness * diff;
+      this.arbForce[3] = -TUNE.antiRollStiffness * diff;
     }
 
+    const springCeiling = (TUNE.chassisMass * 9.82) * 1.15;
+    const arbLimit = (TUNE.chassisMass * 9.82) * 0.45;
     for (let i = 0; i < 4; i += 1) {
       if (!this.grounded[i]) continue;
-      const arbLimit = (TUNE.chassisMass * 9.82) * 0.45;
-      const total = clamp(this.springForce[i] + this.arbForce[i], 0, arbLimit);
+      // Clamp the bar's own contribution, not the corner's total. Capping the
+      // total at 45 % of the vehicle weight meant two wheels could only ever
+      // carry 90 % of it: as soon as the uphill pair unloaded, the truck had to
+      // fall, which is the other half of the sidehill rollover.
+      const arb = clamp(this.arbForce[i], -arbLimit, arbLimit);
+      const total = clamp(this.springForce[i] + arb, 0, springCeiling);
       this.load[i] = total;
       this.body.applyLocalForce(
         new CANNON.Vec3(0, total, 0),
