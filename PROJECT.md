@@ -194,7 +194,7 @@ All of this is top-level in `src/main.js`; the module uses top-level `await`.
    gets `.show`, `#boot` gets `.done`.
 4. **Renderer**: `WebGLRenderer({ antialias: preset.antialias, powerPreference:
    'high-performance', stencil: false })`; `outputColorSpace = SRGB`;
-   `toneMapping = ACESFilmicToneMapping`; `shadowMap.enabled = true`;
+   `toneMapping = LinearToneMapping`; `shadowMap.enabled = true`;
    **`shadowMap.autoUpdate = false`** (shadows are requested by cadence, see §5).
 5. **Scene + camera**: background `0xa8bccd`, `Fog(40, 260)` placeholder (replaced
    later by `FogExp2` in `AtmosphereAndPostFX`); `PerspectiveCamera(58°, aspect, 0.1, 3200)`.
@@ -571,6 +571,19 @@ not ACES**: the palette is authored in display space and ACES turned an authored
 sky `#fad6c8` into `#e1e1e1` on screen. Lighting is deliberately high-key
 (`sunIntensity 1.35`, `hemiIntensity 1.18`) so a face turned away from the sun
 stays pale stone instead of going black.
+
+**The clock owns the look; a preset is a latch.** `AtmosphereAndPostFX`'s four
+phases (`dawn`, `golden`, `overcast`, `night`) carry their own sun, ambient, fog,
+exposure and sky scattering. Booting into a latched preset was a bug: the cycle
+kept moving the sun while the lights stayed golden, so night rendered as dusk.
+`OverlandStyle` therefore records `GOLDEN_MEADOW` without locking at boot, `Y`
+locks a preset, and any time-of-day change (`setTimePreset`, `setDynamicCycle`)
+calls `clearStyleOverride()`. The visible sky is `StyleOverhaul`'s dome, not the
+atmosphere's `Sky` shader, so the dome carries a `SKY_PHASES` palette (horizon,
+zenith, cloud lit/shade, cloud cover, sun glow) and eases to it in
+`onBeforeRender`. Water dims with the phase in `WaterSystem.update` — the authored
+turquoise is a linear-space multiplier, so night needs a few percent, not a
+quarter, to stop the lake glowing.
 
 ---
 
@@ -993,6 +1006,19 @@ One `AudioContext`, one bus tree (`engine`, `drivetrain`, `tyres`, `mechanical`,
 - `OverlandStyle` — linear tone mapping (ACES is wrong for this palette), four
   presets (`GOLDEN_MEADOW`, `ALPINE_NOON`, `ALPENGLOW_SUNSET`, `STORM_CONVOY`)
   cycled with `Y`, global `wetness`/`snowLine` uniforms for material factories.
+  Presets **latch**; the day phases are the default and any time change clears
+  the latch (see §8.5).
+- `AtmosphereAndPostFX.PHASES` — the only writer of sun/ambient/fog/exposure
+  (`applyPhase`), plus per-phase sky scattering. Retuned for linear: golden is
+  the high-key reference (`1.35` sun / `1.18` fill / `0.95` exposure), overcast
+  is ambient-dominant (`1.0` key / `1.3` fill, turbidity `16`, Rayleigh `0.5`),
+  night is a moonlit phase (sun elevation `16°`, `0.4` key, `1.3` exposure), and
+  dawn keeps a low-but-real key at `9°`.
+- `StyleOverhaul.SKY_PHASES` — the dome is the visible sky; its colours follow
+  `atmosphere.phaseId`.
+- Region grading in `StyleDNA` is a **stable weight**, not a per-frame lerp: the
+  phase rewrites fog/exposure every frame, so the old `dt * 0.8` nudges were
+  invisible. Night weights it to `0.02` because colours mix in linear light.
 
 Order matters: palette → terrain build → materials → toon pass → atmosphere.
 
@@ -1118,6 +1144,7 @@ frame, so read the stats after a render or via `captureRenderStats`.
 | `f23f0a2` | gameplay: `MissionManager.nextObjective()` + HUD **NEXT** distance row, driver-assist prompts for rollover, being bogged and a dry tank |
 | `9eeb085` | landmarks: `LandmarkModels` + `PointsOfInterest` — castle keeps on the watchtower sites, gatehouse and curtain walls at the river crossing, three ruin fields, 132 trail cairns and named trailhead signposts; whole layer baked to 17 meshes / 24.5k triangles |
 | red-rock country | **`MesaField`**: terraced buttes/massifs, palm oases and instanced scrub baked to 4 draw calls / ~11.8k stone triangles; fog floor `1.45 / viewDistance` → `0.6 / viewDistance` (the floor, not the authored haze, was whitewashing the valley); ACES → `LinearToneMapping`; high-key sun/hemisphere; canyon ground retinted to sun-bleached sand; water pulled toward its own colour so the river stays turquoise against a pale sky |
+| phase audit | **every region × every phase checked under linear tone mapping**: presets no longer latch over the clock (night used to render as golden hour), `PHASES` retuned for a linear curve (golden high-key reference, ambient-dominant overcast with turbidity 16 / Rayleigh 0.5, moonlit night, 9° dawn), sky dome follows `phaseId` via `SKY_PHASES`, night water dimmed to a few percent in linear space, region grading made a stable weight (night `0.02`), alpine snow albedo `0xeef2f5` → `0xdfe8f0` with rock painted onto steep faces, coast/alpine ground tints warmed/cooled to match their regions |
 | low-poly/sharp | **low-poly + crisp pass**: nine-tap unsharp-mask `ShaderPass` (strength 0.9, contrast-gated) after the grade, bloom strength cut across all phases and region palettes (0.34 → 0.16 max) with a 0.32 radius, grade contrast 1.1 → 1.16, five-sided trunks/poles, six-sided pines, 20-facet boulders, all flat-shaded |
 
 Earlier work still in force: 150 m chunked props with distance LOD and far proxies,

@@ -45,7 +45,9 @@ export const REGIONS = [
       skyTint: 0xff8a4a,
       sunTint: 0xffd1a1,
       ambient: 0x3d4f6b,
-      exposure: 1.02,
+      // Under linear tone mapping this value is a straight multiplier on the
+      // phase exposure, so the old 1.02 lifted the whole meadow into the haze.
+      exposure: 1.0,
       bloom: 0.16,
     },
     // Rolling and soft: squash the amplitude of the base noise.
@@ -67,7 +69,9 @@ export const REGIONS = [
       skyTint: 0xffd6a5,
       sunTint: 0xffc27a,
       ambient: 0x4a3d63,
-      exposure: 1.06,
+      // Neutral: the canyon is the tuned reference and must not drift when the
+      // region grade became a real multiplier instead of a per-frame nudge.
+      exposure: 0.95,
       bloom: 0.13,
     },
     // Terraced benches: quantise the height into 7 m steps and blend.
@@ -87,11 +91,13 @@ export const REGIONS = [
       ground: 0x6c7a58,
       groundAlt: 0xe6ecf2,
       accent: 0x4d6b7d,
-      fog: 0xa9c1cd,
+      fog: 0xb4c8d6,
       skyTint: 0x59a6d6,
       sunTint: 0xfff0cf,
       ambient: 0x2f4a63,
-      exposure: 1.0,
+      // Snow has no shoulder to roll off under a linear curve: a small pull on
+      // exposure is what keeps the ridge faceted instead of paper white.
+      exposure: 0.82,
       bloom: 0.11,
     },
     shape(h, x, z) {
@@ -112,7 +118,7 @@ export const REGIONS = [
       skyTint: 0x3fa9e8,
       sunTint: 0xfff6e0,
       ambient: 0x3a6a86,
-      exposure: 1.08,
+      exposure: 1.02,
       bloom: 0.1,
     },
     // Beach falls away to the sea; the water plane does the rest.

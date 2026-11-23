@@ -8,8 +8,8 @@
  *    The host owns the clock and broadcasts it, so a squad watches the same
  *    sunset (see sendTimeSync/applyTimeSync).
  *  - FogExp2 whose density grows with height and with the selected phase.
- *  - EffectComposer (RenderPass + UnrealBloomPass + OutputPass with ACES) on
- *    MEDIUM/HIGH; a plain forward pass on LOW.
+ *  - EffectComposer (RenderPass + bloom + grade + sharpen + OutputPass, all
+ *    linear) on MEDIUM/HIGH; a plain forward pass on LOW.
  *  - Night driving: SpotLight headlights, additive volumetric cones, glowing
  *    tail, brake and reverse lamps on truck + trailer.
  *  - Campfire outposts (flicker + embers) with a co-op rest action, and a
@@ -32,16 +32,23 @@ const PHASES = [
     id: 'dawn',
     label: 'DAWN MIST',
     t0: 0.0,
-    elevation: 4,
+    // 4 degrees put almost no light on flat ground (N.L = sin(4 deg) = 0.07),
+    // so the basin read as flat blue-grey and only the cliff tops caught any
+    // sun. Nine degrees still gives long shadows but lights the valley floor.
+    elevation: 9,
     azimuth: 100,
-    sunColor: 0xffd9b0,
-    sunIntensity: 1.5,
-    ambient: 0xdfe9f2,
-    ambientIntensity: 0.9,
-    fogColor: 0xbcccd8,
-    fogDensity: 0.0115,
-    exposure: 0.94,
+    sunColor: 0xffd2a4,
+    sunIntensity: 1.9,
+    ambient: 0xdbe5ef,
+    ambientIntensity: 1.05,
+    fogColor: 0xc2d0dc,
+    fogDensity: 0.0095,
+    exposure: 1.0,
     bloom: 0.1,
+    turbidity: 7.0,
+    rayleigh: 2.6,
+    mieCoefficient: 0.006,
+    mieDirectionalG: 0.82,
     night: false,
     weather: 'mist',
   },
@@ -54,14 +61,22 @@ const PHASES = [
     // enough to light the whole basin evenly.
     elevation: 42,
     azimuth: 205,
-    sunColor: 0xffb266,
-    sunIntensity: 3.1,
-    ambient: 0xbcd2e6,
-    ambientIntensity: 0.75,
-    fogColor: 0xcdbfae,
-    fogDensity: 0.0068,
-    exposure: 1.05,
-    bloom: 0.14,
+    // These are the tuned values, not the pre-linear ones. The phase used to
+    // sit under a latched GOLDEN_MEADOW preset, so its own 3.1-intensity orange
+    // sun was never actually rendered; under linear tone mapping that value
+    // clips every lit surface to white. The high-key palette lives here now.
+    sunColor: 0xfff2d8,
+    sunIntensity: 1.35,
+    ambient: 0xf0e2d4,
+    ambientIntensity: 1.18,
+    fogColor: 0xedc9b7,
+    fogDensity: 0.0042,
+    exposure: 0.95,
+    bloom: 0.12,
+    turbidity: 2.4,
+    rayleigh: 1.6,
+    mieCoefficient: 0.0035,
+    mieDirectionalG: 0.86,
     night: false,
     weather: 'clear',
   },
@@ -69,16 +84,25 @@ const PHASES = [
     id: 'overcast',
     label: 'OVERCAST',
     t0: 0.5,
-    elevation: 34,
+    elevation: 40,
     azimuth: 330,
-    sunColor: 0xcfd8e2,
-    sunIntensity: 1.15,
-    ambient: 0xa9b8c6,
-    ambientIntensity: 1.25,
+    // Diffuse, not dim: an overcast lid is mostly ambient, and with linear
+    // tone mapping a weak key plus a dark sky just went muddy. The grey comes
+    // from turbidity below, the light from the hemisphere.
+    sunColor: 0xc3ceda,
+    sunIntensity: 1.0,
+    ambient: 0xb4c2d0,
+    // 1.5 of ambient against a pale lid erased every facet on the alpine ridge:
+    // white snow, white fog and a white sky. Keep a little key and less fill.
+    ambientIntensity: 1.3,
     fogColor: 0x93a3b2,
-    fogDensity: 0.0135,
+    fogDensity: 0.0075,
     exposure: 1.0,
-    bloom: 0.08,
+    bloom: 0.07,
+    turbidity: 16.0,
+    rayleigh: 0.5,
+    mieCoefficient: 0.02,
+    mieDirectionalG: 0.55,
     night: false,
     weather: 'rain',
   },
@@ -86,16 +110,24 @@ const PHASES = [
     id: 'night',
     label: 'NIGHT TRAIL',
     t0: 0.75,
-    elevation: -14,
+    // A moon above the ridge, not a sun below it. At -14 degrees the key light
+    // contributed nothing to the ground, and the old ACES curve happened to
+    // lift the ambient into a legible blue; under linear tone mapping the same
+    // numbers collapsed to near-black, and the headlights only lit the ruts.
+    elevation: 16,
     azimuth: 25,
-    sunColor: 0x8ba6d8,
-    sunIntensity: 0.22,
-    ambient: 0x24334a,
-    ambientIntensity: 0.26,
-    fogColor: 0x070f1b,
-    fogDensity: 0.019,
-    exposure: 1.08,
-    bloom: 0.4,
+    sunColor: 0xa9c0ec,
+    sunIntensity: 0.4,
+    ambient: 0x2f4665,
+    ambientIntensity: 0.62,
+    fogColor: 0x0b1522,
+    fogDensity: 0.014,
+    exposure: 1.3,
+    bloom: 0.34,
+    turbidity: 1.2,
+    rayleigh: 0.35,
+    mieCoefficient: 0.001,
+    mieDirectionalG: 0.9,
     night: true,
     weather: 'clear',
   },
@@ -395,7 +427,12 @@ export class AtmosphereAndPostFX {
   /** Phase 8: the player can pin the clock from Settings. */
   setDynamicCycle(on) {
     this.running = !!on;
-    if (this.running) this.weatherMode = 'clear';
+    if (this.running) {
+      this.weatherMode = 'clear';
+      // Letting the clock run has to win over a latched look, or the world
+      // sits in one preset while the sun marches across the sky behind it.
+      this.clearStyleOverride();
+    }
   }
 
   setTimePreset(id) {
@@ -403,6 +440,8 @@ export class AtmosphereAndPostFX {
     if (!(id in map)) return;
     this.running = false;
     this.weatherMode = id === 'snow' ? 'snow' : 'clear';
+    // Picking a time of day is an explicit request for that phase's look.
+    this.clearStyleOverride();
     this.skipTo(map[id]);
   }
 
@@ -476,6 +515,17 @@ export class AtmosphereAndPostFX {
   }
 
   /**
+   * Hand the lights back to the clock. A latched preset used to survive every
+   * time-of-day change, so "night" still rendered as golden hour with a low
+   * sun and the phase system looked broken.
+   */
+  clearStyleOverride() {
+    if (!this.styleOverride) return;
+    this.styleOverride = null;
+    this.applyPhase(0, true);
+  }
+
+  /**
    * Blend the two neighbouring phases into the live lights/sky/fog.
    * `force` regenerates the environment map immediately.
    */
@@ -494,6 +544,14 @@ export class AtmosphereAndPostFX {
     // Sky shader uses the sun direction uniform.
     const u = this.sky.material.uniforms;
     u.sunPosition.value.copy(this._sunDir);
+    // Scattering belongs to the phase as much as the lights do. High turbidity
+    // with almost no Rayleigh is what turns the shader's clear blue into an
+    // overcast lid; a thin, dark atmosphere is what lets night read as night
+    // rather than a dim blue noon.
+    u.turbidity.value = lerp(a.turbidity ?? 2.4, b.turbidity ?? 2.4, smooth);
+    u.rayleigh.value = lerp(a.rayleigh ?? 1.6, b.rayleigh ?? 1.6, smooth);
+    u.mieCoefficient.value = lerp(a.mieCoefficient ?? 0.0035, b.mieCoefficient ?? 0.0035, smooth);
+    u.mieDirectionalG.value = lerp(a.mieDirectionalG ?? 0.86, b.mieDirectionalG ?? 0.86, smooth);
 
     // The scene's directional light follows it, riding along with the truck.
     const bodyPos = this.vehicle.body.position;

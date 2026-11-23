@@ -176,7 +176,8 @@ try {
 
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
+// The palette is authored in display space; see OverlandStyle for why linear.
+renderer.toneMapping = THREE.LinearToneMapping;
 renderer.shadowMap.enabled = true;
 // The shadow map is a second submission of every caster in the scene, and the
 // sun follows the truck, so it only needs refreshing at a twentieth of a

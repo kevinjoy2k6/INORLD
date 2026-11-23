@@ -1204,6 +1204,15 @@ export class TerrainSystem {
         const snowBlend = smoothstep(30, 52, h);
         if (snowBlend > 0 && key !== 'snow') color.lerp(tint.setHex(BIOMES.snow.color), snowBlend * 0.85);
 
+        // Alpine faces: snow only holds on the shallows, and a uniform white
+        // field has no facets to read under a bright sky. Steep snow loses
+        // colour to wet rock the way real ridges do. Paint only — the biome
+        // still owns grip, sinkage and the spray the tyres throw.
+        if (key === 'snow' && region.id === 'alpine') {
+          const rockFace = smoothstep(0.28, 0.75, this.slopeGrid[index]);
+          color.lerp(tint.setHex(0x6f7c88), rockFace * 0.75);
+        }
+
         // Flat-shaded style: no per-pixel ground noise. A 2% break-up only
         // keeps huge fields from reading as one solid colour swatch.
         const grit = 0.98 + (this.noiseD(x * 0.045, z * 0.045) * 0.5 + 0.5) * 0.04;

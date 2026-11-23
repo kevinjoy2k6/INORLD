@@ -177,23 +177,38 @@ export class StyleDNA {
     // Grade toward the region palette on top of whatever the time-of-day phase
     // wrote this frame. Fog, exposure and bloom carry the mood; the sun colour
     // stays under the phase system's control.
+    //
+    // The phase rewrites all of these every frame, so a per-frame lerp can only
+    // nudge them by a fraction of a percent and the four regions used to render
+    // almost identically. The blend below is a stable 0..1 weight instead, and
+    // each value is mixed from the phase's own by a fixed amount. Night and
+    // cloud also get far less of it: painting a peach region haze onto a
+    // moonlit ridge is how you turn night back into dusk.
+    const phase = atmosphere.phaseId;
+    // Almost nothing at night: colours interpolate in linear light here, so even
+    // a tenth of the peach meadow haze came out as a grey #3f4149 band over the
+    // ridge against a #1c2b46 sky.
+    const wanted = atmosphere.night ? 0.02 : phase === 'overcast' ? 0.4 : 1;
+    this.blend += (wanted - this.blend) * Math.min(1, dt * 1.6);
+    const w = this.blend;
+    if (w < 0.01) return;
+
     const palette = region.palette;
-    const k = Math.min(1, dt * 0.8);
     this._fogTarget.setHex(palette.fog);
-    atmosphere.scene.fog.color.lerp(this._fogTarget, k * 0.9);
+    atmosphere.scene.fog.color.lerp(this._fogTarget, 0.45 * w);
 
     if (atmosphere.hemisphere) {
       this._tmp.setHex(palette.ambient);
-      atmosphere.hemisphere.color.lerp(this._tmp, k * 0.35);
+      atmosphere.hemisphere.color.lerp(this._tmp, 0.22 * w);
     }
     if (atmosphere.bloom && atmosphere.bloom.strength !== undefined) {
       const target = palette.bloom;
-      atmosphere.bloom.strength += (target - atmosphere.bloom.strength) * k * 0.5;
+      atmosphere.bloom.strength += (target - atmosphere.bloom.strength) * 0.3 * w;
     }
     const exposure = atmosphere.renderer?.toneMappingExposure;
     if (exposure !== undefined) {
-      const target = palette.exposure;
-      atmosphere.renderer.toneMappingExposure = exposure + (target - exposure) * k * 0.4;
+      const ratio = palette.exposure / 0.95;
+      atmosphere.renderer.toneMappingExposure = exposure * (1 + (ratio - 1) * 0.55 * w);
     }
   }
 

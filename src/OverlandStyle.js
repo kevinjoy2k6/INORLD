@@ -3,8 +3,8 @@
  *
  * Implements the "Over the Hill" look at the level it actually belongs to:
  *
- *   - AgX tone mapping with a wide, filmic highlight roll-off, so the meadow
- *     glows gold at golden hour without clipping to white.
+ *   - Linear tone mapping plus a display-space grade, so the flat pastel
+ *     palette survives to the screen without being rolled toward grey.
  *   - Four lighting presets (golden meadow, alpine noon, alpenglow sunset,
  *     storm convoy), each driving sun, ambient, fog and wetness together.
  *   - Aerial distance fog plus valley height mist, injected once into every
@@ -40,36 +40,41 @@ export const STYLE_PRESETS = {
   },
   ALPINE_NOON: {
     label: 'ALPINE NOON',
+    // A 3.0 key was written for ACES, which folded the top of the range back
+    // into white paint. Linear clips it instead, so snow at noon needs a key
+    // near the golden preset and a slightly under-exposed frame.
     sunColour: '#fffdf8',
-    sunIntensity: 3.0,
-    skyColour: '#8cc2ec',
-    groundColour: '#9ba8a4',
-    hemiIntensity: 1.3,
-    fogDensity: 0.002,
-    fogColour: '#dcebf7',
-    exposure: 1.02,
+    sunIntensity: 1.55,
+    skyColour: '#a8cdf0',
+    groundColour: '#b8c4c6',
+    hemiIntensity: 1.35,
+    fogDensity: 0.0022,
+    fogColour: '#d6e7f4',
+    exposure: 0.92,
   },
   ALPENGLOW_SUNSET: {
     label: 'ALPENGLOW',
     sunColour: '#ffae96',
-    sunIntensity: 2.1,
+    sunIntensity: 1.7,
     skyColour: '#b8a4d4',
     groundColour: '#d498b0',
-    hemiIntensity: 1.05,
+    hemiIntensity: 1.15,
     fogDensity: 0.0055,
     fogColour: '#f6c2c8',
-    exposure: 1.12,
+    exposure: 1.0,
   },
   STORM_CONVOY: {
     label: 'STORM CONVOY',
     sunColour: '#4a628a',
-    sunIntensity: 0.55,
-    skyColour: '#182640',
+    sunIntensity: 0.7,
+    skyColour: '#2c3a52',
     groundColour: '#162038',
-    hemiIntensity: 0.65,
+    hemiIntensity: 0.9,
     fogDensity: 0.0115,
     fogColour: '#2b426b',
-    exposure: 0.98,
+    // Storm is meant to be the dark one, but linear has no shoulder to lift
+    // it: 0.98 left the trail a black cutout under a bright grey sky.
+    exposure: 1.05,
   },
 };
 
@@ -98,11 +103,14 @@ export class OverlandStyle {
       this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     }
 
+    // Record the default without latching it. A locked preset is a deliberate
+    // choice (`Y`), and booting into one meant the day/night cycle painted a
+    // new sun position every frame under a fixed golden exposure.
     this.preset = 'GOLDEN_MEADOW';
-    this.applyPreset('GOLDEN_MEADOW');
+    this.applyPreset('GOLDEN_MEADOW', { lock: false });
   }
 
-  applyPreset(name) {
+  applyPreset(name, { lock = true } = {}) {
     const preset = STYLE_PRESETS[name];
     if (!preset) return null;
     this.preset = name;
@@ -128,7 +136,7 @@ export class OverlandStyle {
     // Hand the look to the atmosphere instead of writing the lights here. The
     // phase system runs every frame; a second writer makes the sun, ambient
     // and fog oscillate between two values, which reads as the world strobing.
-    if (typeof this.atmosphere?.setStyleOverride === 'function') {
+    if (lock && typeof this.atmosphere?.setStyleOverride === 'function') {
       this.atmosphere.setStyleOverride({
         sunColor: new THREE.Color(preset.sunColour),
         sunIntensity: preset.sunIntensity,

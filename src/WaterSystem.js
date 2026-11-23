@@ -217,6 +217,29 @@ export class WaterSystem {
     uniforms.eye.value.copy(camera.position);
     if (sunDirection) uniforms.sunDirection.value.copy(sunDirection);
 
+    // The authored turquoise is added on top of the mirror, so it stays noon
+    // bright at midnight while the reflected sky goes black. Scale the lit
+    // colour ramp with the phase; the mirror itself already follows the sky.
+    if (!this._baseWater) {
+      this._baseWater = uniforms.waterColor.value.clone();
+      this._baseShallow = uniforms.shallowTint ? uniforms.shallowTint.value.clone() : null;
+      this._baseFoam = uniforms.foamColour ? uniforms.foamColour.value.clone() : null;
+      this._baseSun = uniforms.sunColor ? uniforms.sunColor.value.clone() : null;
+      this._light = 1;
+    }
+    const phase = this.atmosphere?.phaseId;
+    const wanted = this.atmosphere?.night ? 0 : phase === 'overcast' ? 0.7 : phase === 'dawn' ? 0.6 : 1;
+    this._light += (wanted - this._light) * Math.min(1, dt * 2);
+    // These are linear-light multipliers, and the output is sRGB: 0.2 of the
+    // turquoise still lands around #3d8bab on screen, which is why a night lake
+    // stayed cyan at a quarter brightness. Night has to go to a few percent.
+    const gain = 0.03 + 0.97 * this._light;
+    uniforms.waterColor.value.copy(this._baseWater).multiplyScalar(gain);
+    if (this._baseShallow) uniforms.shallowTint.value.copy(this._baseShallow).multiplyScalar(gain);
+    if (this._baseFoam) uniforms.foamColour.value.copy(this._baseFoam).multiplyScalar(0.12 + 0.88 * this._light);
+    // The warm glint is keyed to a daytime sun; left alone it is the brightest
+    // thing in a night frame, a white smear across a black lagoon.
+    if (this._baseSun) uniforms.sunColor.value.copy(this._baseSun).multiplyScalar(0.05 + 0.95 * this._light);
   }
 
   setQuality(tier) {

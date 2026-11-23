@@ -42,13 +42,31 @@ export const PALETTE = {
   waterShaderShallow: 0x9ba8a4,
 };
 
+/*
+ * Sky palette per day phase. This dome is the sky the player actually sees
+ * (it hides the atmosphere's Sky shader), so it cannot be authored once at
+ * golden hour: a fixed pastel horizon left night looking like an overexposed
+ * dusk and overcast like a clear dawn. Values are display-space colours.
+ */
+const SKY_PHASES = {
+  dawn: { horizon: 0xf3cbb2, zenith: 0xb9c9dc, cloudLit: 0xffe8d8, cloudShade: 0x9fadc2, sun: 0xffc8a0, cover: 0.55 },
+  golden: { horizon: 0xfad6c8, zenith: 0xdfeaf4, cloudLit: 0xfff8f2, cloudShade: 0xd8b8b8, sun: 0xfff0d6, cover: 0.62 },
+  // Darker than a real overcast lid needs to be, because the ground under it is
+  // still lit and snow is near-white: a pale sky leaves no silhouette anywhere.
+  overcast: { horizon: 0x96a4b1, zenith: 0x6c7a87, cloudLit: 0xb6c1ca, cloudShade: 0x5f6b78, sun: 0x8e9aa6, cover: 0.34 },
+  night: { horizon: 0x1c2b46, zenith: 0x060b16, cloudLit: 0x2e3d58, cloudShade: 0x0b1220, sun: 0x9fb6e0, cover: 0.5 },
+};
+
 /** Ground colours the terrain's biome lookup should use under the new palette. */
 const BIOME_COLOURS = {
   trail: 0xd2ab7f,
   hardpack: 0xeccb9f,
   mud: 0xb08e68,
   sand: 0xedbf9c,
-  snow: 0xeef2f5,
+  // Not paper white. Linear tone mapping clips at 1.0 with no highlight
+  // roll-off, and a full-white albedo under a 1.35 key plus 1.18 fill was the
+  // whole alpine region turning into a blank sheet.
+  snow: 0xdfe8f0,
   rock: 0xd6a88c,
   water: 0x5f9aa2,
 };
@@ -66,10 +84,10 @@ export function applyStylePalette() {
   // pure orange. The rock gets its colour from MesaField's strata; the ground
   // under it has to be pale enough for the strata to sit on top of.
   const regionTints = {
-    meadow: 0xf3b552,
+    meadow: 0xe9b667,
     canyon: 0xe0a888,
-    alpine: 0xa9b3bd,
-    coast: 0xe8c98a,
+    alpine: 0x9fb4c6,
+    coast: 0xefd9b3,
   };
   for (const region of REGIONS) {
     const tint = regionTints[region.id];
@@ -156,10 +174,10 @@ export class StyleOverhaul {
     // Region ground tints keep the four regions distinct inside the new
     // palette: golden meadow, rust canyon, cold alpine, bleached coast.
     this._regionTints = {
-      meadow: 0xf0b455,
+      meadow: 0xe9b667,
       canyon: 0xe0a888,
-      alpine: 0xa9b3bd,
-      coast: 0xe3c48f,
+      alpine: 0x9fb4c6,
+      coast: 0xefd9b3,
     };
     this._applyPalette();
     this._applyMaterials();
@@ -400,11 +418,29 @@ export class StyleOverhaul {
     // cloud in it) was simply never seen. onBeforeRender runs before three
     // builds the model-view matrix, so moving the dome here is safe and keeps
     // the sky glued to the horizon wherever the truck goes.
+    let lastSky = performance.now();
+    const skyTarget = new THREE.Color();
     dome.onBeforeRender = (renderer, scene, camera) => {
-      material.uniforms.uTime.value = performance.now() * 0.001;
+      const now = performance.now();
+      const dt = Math.min(0.25, (now - lastSky) / 1000);
+      lastSky = now;
+      const u = material.uniforms;
+      u.uTime.value = now * 0.001;
       dome.position.copy(camera.position);
       dome.scale.setScalar(Math.max(700, camera.far * 0.92));
       dome.updateMatrixWorld(true);
+
+      // Follow the clock. The shader's colours are its own, so a phase change
+      // has to be pushed into them here; two seconds of easing is enough that
+      // the authored 25% crossfade between phases is not doubled into a snap.
+      const phase = SKY_PHASES[atmosphere?.phaseId] || SKY_PHASES.golden;
+      const k = 1 - Math.exp(-dt * 2.2);
+      u.horizonColour.value.lerp(skyTarget.setHex(phase.horizon), k);
+      u.zenithColour.value.lerp(skyTarget.setHex(phase.zenith), k);
+      u.cloudLit.value.lerp(skyTarget.setHex(phase.cloudLit), k);
+      u.cloudShade.value.lerp(skyTarget.setHex(phase.cloudShade), k);
+      u.sunColour.value.lerp(skyTarget.setHex(phase.sun), k);
+      u.uCloudCover.value += (phase.cover - u.uCloudCover.value) * k;
     };
     this.scene.add(dome);
     this.sky = dome;
