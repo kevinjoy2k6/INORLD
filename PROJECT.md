@@ -578,7 +578,19 @@ exposure and sky scattering. Booting into a latched preset was a bug: the cycle
 kept moving the sun while the lights stayed golden, so night rendered as dusk.
 `OverlandStyle` therefore records `GOLDEN_MEADOW` without locking at boot, `Y`
 locks a preset, and any time-of-day change (`setTimePreset`, `setDynamicCycle`)
-calls `clearStyleOverride()`. The visible sky is `StyleOverhaul`'s dome, not the
+calls `clearStyleOverride()`.
+
+**Two rendering paths, one look.** `LOW`/`MEDIUM` and any governor rung that
+sheds post-processing draw straight to the canvas: no grade, no sharpen, at a
+pixel ratio the governor can clamp to 0.4. Two things therefore live outside the
+composer. (1) Grade chroma moved partly into the baked palette: `saturate()`
+raises `BIOME_COLOURS` and every region ground tint by 1.15 in
+`applyStylePalette` (guarded, once), and the grade pass runs at 1.2 instead of
+1.3. Measured on canyon sand: graded chroma 94.5 → 96, ungraded 70.2 → 79.4.
+(2) The fog floor is `0.6 / max(viewDistance, 240)`: at the low preset's 130 m
+draw the old `0.6 / viewDistance` was 0.0046 and turned the mesas into 85% haze
+by 200 m; the cap keeps the draw cut hidden without erasing the country. Never
+make the floor depend on draw distance again without checking LOW. The visible sky is `StyleOverhaul`'s dome, not the
 atmosphere's `Sky` shader, so the dome carries a `SKY_PHASES` palette (horizon,
 zenith, cloud lit/shade, cloud cover, sun glow) and eases to it in
 `onBeforeRender`. Water dims with the phase in `WaterSystem.update` — the authored
@@ -1144,6 +1156,7 @@ frame, so read the stats after a render or via `captureRenderStats`.
 | `f23f0a2` | gameplay: `MissionManager.nextObjective()` + HUD **NEXT** distance row, driver-assist prompts for rollover, being bogged and a dry tank |
 | `9eeb085` | landmarks: `LandmarkModels` + `PointsOfInterest` — castle keeps on the watchtower sites, gatehouse and curtain walls at the river crossing, three ruin fields, 132 trail cairns and named trailhead signposts; whole layer baked to 17 meshes / 24.5k triangles |
 | red-rock country | **`MesaField`**: terraced buttes/massifs, palm oases and instanced scrub baked to 4 draw calls / ~11.8k stone triangles; fog floor `1.45 / viewDistance` → `0.6 / viewDistance` (the floor, not the authored haze, was whitewashing the valley); ACES → `LinearToneMapping`; high-key sun/hemisphere; canyon ground retinted to sun-bleached sand; water pulled toward its own colour so the river stays turquoise against a pale sky |
+| low-quality path | **desert read without the grade**: fog floor `0.6 / viewDistance` → `0.6 / Math.max(viewDistance, 240)` (at 130 m the old value fogged the mesas to 85% haze by 200 m); palette albedo saturation ×1.15 via `saturate()` in `applyStylePalette` with grade saturation 1.3 → 1.2 — graded frame unchanged (canyon chroma 94.5 → 96.0), ungraded frame +13% chroma (70.2 → 79.4) at the governor's 0.4 pixel ratio |
 | phase audit | **every region × every phase checked under linear tone mapping**: presets no longer latch over the clock (night used to render as golden hour), `PHASES` retuned for a linear curve (golden high-key reference, ambient-dominant overcast with turbidity 16 / Rayleigh 0.5, moonlit night, 9° dawn), sky dome follows `phaseId` via `SKY_PHASES`, night water dimmed to a few percent in linear space, region grading made a stable weight (night `0.02`), alpine snow albedo `0xeef2f5` → `0xdfe8f0` with rock painted onto steep faces, coast/alpine ground tints warmed/cooled to match their regions |
 | low-poly/sharp | **low-poly + crisp pass**: nine-tap unsharp-mask `ShaderPass` (strength 0.9, contrast-gated) after the grade, bloom strength cut across all phases and region palettes (0.34 → 0.16 max) with a 0.32 radius, grade contrast 1.1 → 1.16, five-sided trunks/poles, six-sided pines, 20-facet boulders, all flat-shaded |
 

@@ -341,7 +341,10 @@ export class AtmosphereAndPostFX {
     this.grade = new ShaderPass({
       uniforms: {
         tDiffuse: { value: null },
-        saturation: { value: 1.3 },
+        // Part of the grade's chroma now lives in the baked palette so the
+        // no-post path keeps it. Measured back: palette ×1.15 plus 1.2 here
+        // reproduces the old 1.3 on screen (chroma 94 → 95 on canyon sand).
+        saturation: { value: 1.2 },
         contrast: { value: 1.06 },
         lift: { value: 0.04 },
         warm: { value: new THREE.Vector3(1.04, 1.0, 0.94) },
@@ -880,7 +883,12 @@ export class AtmosphereAndPostFX {
     // floor has to stay below the authored haze or it becomes the whole look:
     // at 1.45 / 350 m the valley disappeared into a white sheet at 200 m, with
     // haze thick enough to erase every ridge and every mesa behind them.
-    if (this.viewDistance) density = Math.max(density, 0.6 / this.viewDistance);
+    // The floor hides the prop/draw cut, but it must not swallow the country.
+    // At 350 m the cut is far enough that 0.6 / viewDistance is a whisper; at
+    // the low preset's 130 m the same formula is 0.0046 and the canyon's mesas
+    // became pale ghosts by 200 m. Cap the divisor so short draw distances keep
+    // the haze they need and no more.
+    if (this.viewDistance) density = Math.max(density, 0.6 / Math.max(this.viewDistance, 240));
     if (this.weatherMode === 'snow') density *= 1.3;
     this.scene.fog.density = density;
     if (this.weatherMode === 'snow') {

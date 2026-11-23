@@ -72,13 +72,35 @@ const BIOME_COLOURS = {
 };
 
 /**
+ * Push a display-space colour's saturation up. The grade pass is what adds the
+ * final chroma on MEDIUM/HIGH, and it does not run at all on the low preset —
+ * so a slice of that saturation lives in the albedo instead, where both paths
+ * get it.
+ */
+function saturate(hex, amount) {
+  const colour = new THREE.Color(hex);
+  const hsl = { h: 0, s: 0, l: 0 };
+  colour.getHSL(hsl);
+  colour.setHSL(hsl.h, Math.min(1, hsl.s * amount), hsl.l);
+  return colour.getHex();
+}
+
+/** The palette is baked once; a second call must not saturate it twice. */
+let paletteApplied = false;
+
+/**
  * Apply the palette before any geometry is built: terrain colours are baked
  * into vertex colours at construction time, so this has to run first.
  */
 export function applyStylePalette() {
+  if (paletteApplied) return;
+  paletteApplied = true;
+  // 1.15 here plus grade saturation 1.13 (instead of 1.3) keeps the graded look
+  // where it was and gives the ungraded path about a third of the chroma back.
+  const GROUND_SATURATION = 1.15;
   for (const [key, colour] of Object.entries(BIOME_COLOURS)) {
     const biome = BIOMES[key];
-    if (biome) biome.color = colour;
+    if (biome) biome.color = saturate(colour, GROUND_SATURATION);
   }
   // Ground tints: the canyon is sun-bleached sand and oxidised red rock, not
   // pure orange. The rock gets its colour from MesaField's strata; the ground
@@ -91,7 +113,9 @@ export function applyStylePalette() {
   };
   for (const region of REGIONS) {
     const tint = regionTints[region.id];
-    if (tint !== undefined && region.palette) region.palette.ground = tint;
+    if (tint !== undefined && region.palette) {
+      region.palette.ground = saturate(tint, GROUND_SATURATION);
+    }
   }
 }
 
