@@ -62,22 +62,82 @@ export class VehicleAudioController {
     this._lastThrottle = 0;
     this._ready = false;
 
+    // Audio is a garnish, not a load-bearing system. A bad sample, a closed
+    // context or a Web Audio edge case must degrade the mix, never stop the
+    // truck, so every step goes through `_safe`. Keys are de-duplicated so a
+    // fault that repeats every frame is logged once, not sixty times a second.
+    this._faultKeys = new Set();
+    this.faultCount = 0;
+    this.lastFault = null;
+
     this.mixer.onReady = (ctx) => this._onReady(ctx);
     this.mixer.bindUnlock();
   }
 
-  _onReady(ctx) {
-    this.library.attach(ctx);
-    this.library.load();
-    for (const module of [this.engine, this.exhaust, this.transmission, this.tyres, this.suspension, this.collisions, this.interior, this.environment]) {
-      module.attach(ctx);
+  /** Named modules, so a fault can say which layer broke. */
+  _modules() {
+    return [
+      ['engine', this.engine],
+      ['exhaust', this.exhaust],
+      ['transmission', this.transmission],
+      ['tyres', this.tyres],
+      ['suspension', this.suspension],
+      ['collisions', this.collisions],
+      ['interior', this.interior],
+      ['environment', this.environment],
+    ];
+  }
+
+  /**
+   * Run an audio step. Anything thrown is reported once and swallowed: the
+   * simulation is never allowed to fail because a sound did.
+   */
+  _safe(label, fn) {
+    try {
+      return fn();
+    } catch (error) {
+      this.reportFault(label, error);
+      return undefined;
     }
-    this.mixer.setVolume(this.mixer.volumes.master);
+  }
+
+  /** Record an audio fault once, keep it inspectable, and carry on. */
+  reportFault(label, error) {
+    const message = error?.message || String(error);
+    const key = `${label}: ${message}`;
+    this.faultCount += 1;
+    this.lastFault = { label, message, time: this.mixer.now };
+    if (this._faultKeys.has(key)) return;
+    this._faultKeys.add(key);
+    if (typeof window !== 'undefined') {
+      window.__audioFaults = window.__audioFaults || [];
+      window.__audioFaults.push({ label, message, stack: error?.stack || null });
+    }
+    // warn, not error: the game is still running and this is not a crash.
+    console.warn(`[audio] ${label} failed; the game continues without that layer.`, error);
+  }
+
+  _onReady(ctx) {
+    this._safe('library', () => {
+      this.library.attach(ctx);
+      this.library.load();
+    });
+    for (const [name, module] of this._modules()) {
+      this._safe(`attach.${name}`, () => module.attach(ctx));
+    }
+    this._safe('mixer', () => this.mixer.setVolume(this.mixer.volumes.master));
+    // Ready even if a layer failed to attach: the other layers still play, and
+    // the failed one is caught per frame rather than skipped silently forever.
     this._ready = true;
   }
 
   unlock() {
-    return this.mixer.unlock();
+    try {
+      return this.mixer.unlock();
+    } catch (error) {
+      this.reportFault('unlock', error);
+      return false;
+    }
   }
 
   get ready() {
@@ -108,6 +168,10 @@ export class VehicleAudioController {
   update(dt, telemetry = null, context = {}) {
     if (!this.mixer.ready || !this.enabled) return;
     if (!Number.isFinite(dt) || dt <= 0) return;
+    this._safe('update', () => this._updateFrame(dt, telemetry, context));
+  }
+
+  _updateFrame(dt, telemetry, context) {
     this.mixer.updateListener(this.camera);
     if (this.camera) {
       const e = this.camera.matrixWorld.elements;
@@ -218,35 +282,33 @@ export class VehicleAudioController {
       night: !!this.atmosphere?.night,
     };
 
-    this.engine.update(dt, state);
-    this.exhaust.update(dt, state);
-    this.transmission.update(dt, state);
-    this.tyres.update(dt, state);
-    this.suspension.update(dt, state);
-    this.collisions.update(dt, state);
-    this.interior.update(dt, state);
-    this.environment.update(dt, state);
+    // One layer per try/catch: a broken tyre voice must not silence the engine.
+    for (const [name, module] of this._modules()) {
+      this._safe(name, () => module.update(dt, state));
+    }
   }
 
   /* ------------------------------------------------- compatibility API */
 
   /** Kept for the shift hooks in main.js; now sized by load inside the module. */
   clunk(amount = 1) {
-    this.transmission.onShift({ to: this.vehicle?.gearIndex ?? 1, gearIndex: this.vehicle?.gearIndex ?? 1, load: amount });
+    this._safe('clunk', () =>
+      this.transmission.onShift({ to: this.vehicle?.gearIndex ?? 1, gearIndex: this.vehicle?.gearIndex ?? 1, load: amount }),
+    );
   }
 
   setVolume(v) {
-    this.mixer.setVolume(v);
+    this._safe('setVolume', () => this.mixer.setVolume(v));
   }
 
   setEngineVolume(v) {
     this.engineVolume = clamp01(Number(v) || 0);
-    this.mixer.setBusVolume('engine', this.engineVolume);
+    this._safe('setEngineVolume', () => this.mixer.setBusVolume('engine', this.engineVolume));
   }
 
   setAmbienceVolume(v) {
     this.ambienceVolume = clamp01(Number(v) || 0);
-    this.mixer.setBusVolume('ambience', this.ambienceVolume);
+    this._safe('setAmbienceVolume', () => this.mixer.setBusVolume('ambience', this.ambienceVolume));
   }
 
   getStats() {
@@ -256,12 +318,14 @@ export class VehicleAudioController {
       voices: this.mixer.voiceCount,
       perspective: +this.perspective.toFixed(2),
       weather: this.weather,
+      faults: this.faultCount,
+      lastFault: this.lastFault,
       samples: this.library.getStats(),
     };
   }
 
   dispose() {
-    this.mixer.dispose();
+    this._safe('dispose', () => this.mixer.dispose());
     this._ready = false;
   }
 }

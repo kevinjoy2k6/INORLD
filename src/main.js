@@ -622,12 +622,22 @@ function tickAudioLab(dt) {
       .then(({ AudioLab }) => {
         audioLab = new AudioLab({ audio, vehicle, cameraController, terrain });
         window.__audioLab = audioLab;
-        audioLab.start();
+        try {
+          audioLab.start();
+        } catch (error) {
+          audio.reportFault('audioLab.start', error);
+        }
       })
-      .catch(() => {});
+      .catch((error) => audio.reportFault('audioLab', error));
     return;
   }
-  audioLab.update(dt);
+  // The lab drives the same audio graph, so it gets the same treatment: a
+  // broken measurement must not end the drive.
+  try {
+    audioLab.update(dt);
+  } catch (error) {
+    audio.reportFault('audioLab.update', error);
+  }
 }
 
 quality.onChange(() => atmosphere.setQuality(quality.settings));
@@ -1510,16 +1520,21 @@ function frame(now) {
         ? 'rain'
         : 'clear',
   );
-  audio.update(dt, telemetry, {
-    // Analog pedal first, keyboard as the fallback, so the diesel revs with
-    // however far you actually pushed it.
-    throttle: Math.max(
-      keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0,
-      held.throttleAxis || 0,
-    ),
-    brake: Math.max(keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0, held.brakeAxis || 0),
-    terrain,
-  });
+  // Audio is decorative: a fault here is logged once and the drive continues.
+  audio.update(
+    dt,
+    telemetry,
+    {
+      // Analog pedal first, keyboard as the fallback, so the diesel revs with
+      // however far you actually pushed it.
+      throttle: Math.max(
+        keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0,
+        held.throttleAxis || 0,
+      ),
+      brake: Math.max(keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0, held.brakeAxis || 0),
+      terrain,
+    },
+  );
   tickAudioLab(dt);
 
   // Wind-bent foliage: our truck plus every teammate shoves the grass aside.

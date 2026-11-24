@@ -1041,6 +1041,13 @@ One `AudioContext`, one bus tree (`engine`, `drivetrain`, `tyres`, `mechanical`,
   reach the fatal overlay.
 - `?audiolab` runs `AudioLab`: IDLE → REV → SHIFT → BRAKE → WHEELSPIN → GRAVEL →
   IMPACT → CABIN with per-bus peak metering and clipping counts.
+- **Audio is non-fatal.** `VehicleAudioController` wraps its frame step, each
+  module's `update`/`attach`, `clunk`, the volume setters, `unlock`, `dispose`
+  and the audio lab in `_safe()`. A throw is reported once per label + message
+  through `reportFault()` (`console.warn`, recorded in `window.__audioFaults`
+  and `getStats().faults`); that layer stays silent and the simulation keeps
+  running. One failing layer does not stop the other seven, because each module
+  is guarded separately. An audio fault must never reach the `#fatal` overlay.
 
 ---
 
@@ -1178,7 +1185,13 @@ frame, so read the stats after a render or via `captureRenderStats`.
 16. **A lost GPU is explained, not frozen.** `webglcontextlost` prevents the
     default and shows the fatal overlay with a reload instruction; settings are
     persisted, so a reload always recovers the player's configuration.
-17. **An audio node is started once.** `AudioMixer.noise(startAt)` starts the
+17. **Audio failures are never fatal.** `VehicleAudioController._safe(label, fn)`
+    is the only way audio work is invoked from the frame loop; `reportFault()`
+    de-duplicates by `label: message`, so a fault that recurs every frame is
+    logged once. Never call into a mixer, module or the audio lab unguarded from
+    `main.js`, and never let an audio error reach `showFatal()` — the truck, the
+    world and the netcode must survive a dead speaker.
+18. **An audio node is started once.** `AudioMixer.noise(startAt)` starts the
     shared noise loop itself; callers schedule it by passing a time, never by
     calling `start()` a second time (`InvalidStateError: cannot call start more
     than once`, which reached the fatal overlay mid-drive). The same rule covers
