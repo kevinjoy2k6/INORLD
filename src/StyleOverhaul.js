@@ -49,8 +49,10 @@ export const PALETTE = {
  * dusk and overcast like a clear dawn. Values are display-space colours.
  */
 const SKY_PHASES = {
-  dawn: { horizon: 0xf3cbb2, zenith: 0xb9c9dc, cloudLit: 0xffe8d8, cloudShade: 0x9fadc2, sun: 0xffc8a0, cover: 0.55 },
-  golden: { horizon: 0xfad6c8, zenith: 0xdfeaf4, cloudLit: 0xfff8f2, cloudShade: 0xd8b8b8, sun: 0xfff0d6, cover: 0.62 },
+  // Desert skies: a warm band at the horizon, a deeper blue overhead, and less
+  // cloud than before — a 62 % cover lid over red rock greyed the whole frame.
+  dawn: { horizon: 0xf7c49c, zenith: 0x9fbcd8, cloudLit: 0xffe6cf, cloudShade: 0x9aa6b6, sun: 0xffc089, cover: 0.44 },
+  golden: { horizon: 0xffcf9e, zenith: 0xa9c8e6, cloudLit: 0xfff3e2, cloudShade: 0xc7a596, sun: 0xfff0cf, cover: 0.46 },
   // Darker than a real overcast lid needs to be, because the ground under it is
   // still lit and snow is near-white: a pale sky leaves no silhouette anywhere.
   overcast: { horizon: 0x96a4b1, zenith: 0x6c7a87, cloudLit: 0xb6c1ca, cloudShade: 0x5f6b78, sun: 0x8e9aa6, cover: 0.34 },
@@ -391,7 +393,9 @@ export class StyleOverhaul {
           // pale wash, and heavy cloud detail competes with the rock.
           // Warm bloom around the sun, and a slightly warmer haze band low down.
           float sun = max( dot( dir, normalize( sunDir ) ), 0.0 );
-          colour += sunColour * pow( sun, 18.0 ) * 0.3;
+          // A wider, stronger glow: at 18.0 it was a dot you only saw with the
+          // sun dead centre, so golden hour had no light source in frame.
+          colour += sunColour * pow( sun, 10.0 ) * 0.42;
           colour = mix( colour, horizonColour, smoothstep( 0.16, -0.1, h ) * 0.42 );
 
           // Everything below the horizon is painted over by terrain, so skip
@@ -426,7 +430,7 @@ export class StyleOverhaul {
           // Bright tops, cool bellies: density doubles as a height cue.
           float lit = 0.05 + 0.95 * smoothstep( 0.16, 0.52, density );
           vec3 cloud = mix( cloudShade, cloudLit, lit );
-          cloud += sunColour * pow( sun, 6.0 ) * 0.16;
+          cloud += sunColour * pow( sun, 6.0 ) * 0.24;
 
           colour = mix( colour, cloud, cover * 0.94 );
 

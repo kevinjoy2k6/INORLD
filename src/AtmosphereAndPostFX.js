@@ -149,7 +149,7 @@ const SHARPEN_SHADER = {
   uniforms: {
     tDiffuse: { value: null },
     uTexel: { value: new THREE.Vector2(1 / 1280, 1 / 720) },
-    uStrength: { value: 0.9 },
+    uStrength: { value: 1.15 },
   },
   vertexShader: /* glsl */ `
     varying vec2 vUv;
@@ -180,7 +180,7 @@ const SHARPEN_SHADER = {
       vec3 detail = c - blur;
 
       // Only crisp real edges: haze and flat paint keep their gradient.
-      float edge = smoothstep( 0.004, 0.05, length( detail ) );
+      float edge = smoothstep( 0.003, 0.045, length( detail ) );
       float amount = uStrength * ( 0.4 + 0.6 * edge );
 
       gl_FragColor = vec4( clamp( c + detail * amount, 0.0, 1.0 ), base.a );
@@ -344,9 +344,11 @@ export class AtmosphereAndPostFX {
         // Part of the grade's chroma now lives in the baked palette so the
         // no-post path keeps it. Measured back: palette ×1.15 plus 1.2 here
         // reproduces the old 1.3 on screen (chroma 94 → 95 on canyon sand).
-        saturation: { value: 1.2 },
-        contrast: { value: 1.06 },
-        lift: { value: 0.04 },
+        saturation: { value: 1.24 },
+        // More punch, less lift: a 0.04 lift on every channel was washing the
+        // shadows grey and flattening the facets the style depends on.
+        contrast: { value: 1.12 },
+        lift: { value: 0.02 },
         warm: { value: new THREE.Vector3(1.04, 1.0, 0.94) },
         cool: { value: new THREE.Vector3(0.93, 0.98, 1.09) },
       },
@@ -878,7 +880,9 @@ export class AtmosphereAndPostFX {
     const camY = this.camera.position.y;
     const heightFactor = THREE.MathUtils.clamp(1 - (camY - 4) / 90, 0.35, 1.4);
     const reveal = this.missionManager ? this.missionManager.discovered.size : 0;
-    let density = this.baseFogDensity * (this.fogScale ?? 1) * heightFactor * (1 - reveal * 0.1);
+    // 0.8 on the authored haze: at full strength a 300 m butte was a pale ghost
+    // and the valley read as milk. The floor below still hides the draw cut.
+    let density = this.baseFogDensity * (this.fogScale ?? 1) * heightFactor * (1 - reveal * 0.1) * 0.8;
     // Keep the draw-distance cut in the murk instead of a visible wall. The
     // floor has to stay below the authored haze or it becomes the whole look:
     // at 1.45 / 350 m the valley disappeared into a white sheet at 200 m, with

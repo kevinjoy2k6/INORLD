@@ -1219,10 +1219,12 @@ export class TerrainSystem {
           color.lerp(tint.setHex(0x8a6b57), rockFace * 0.75);
         }
 
-        // Flat-shaded style: no per-pixel ground noise. A 2% break-up only
-        // keeps huge fields from reading as one solid colour swatch.
-        const grit = 0.98 + (this.noiseD(x * 0.045, z * 0.045) * 0.5 + 0.5) * 0.04;
-        color.multiplyScalar(grit);
+        // Flat-shaded style: no per-pixel ground noise, but two baked bands of
+        // break-up — a fine grit and a broad mottle — because a single 2% grain
+        // left the sand reading as one solid brown swatch across the valley.
+        const grit = 0.97 + (this.noiseD(x * 0.045, z * 0.045) * 0.5 + 0.5) * 0.06;
+        const mottle = (this.noiseD(x * 0.008 + 11, z * 0.008 - 7) * 0.5 + 0.5) * 0.08 - 0.04;
+        color.multiplyScalar(grit + mottle);
 
         // Broad sage patches through the sand. The ground stays desert; the
         // green is sparse scrub cover, the same weight in every region, so a

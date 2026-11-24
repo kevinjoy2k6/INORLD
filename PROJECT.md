@@ -596,8 +596,17 @@ sheds post-processing draw straight to the canvas: no grade, no sharpen, at a
 pixel ratio the governor can clamp to 0.4. Two things therefore live outside the
 composer. (1) Grade chroma moved partly into the baked palette: `saturate()`
 raises `BIOME_COLOURS` and every region ground tint by 1.15 in
-`applyStylePalette` (guarded, once), and the grade pass runs at 1.2 instead of
+`applyStylePalette` (guarded, once), and the grade pass runs at 1.24 instead of
 1.3. Measured on canyon sand: graded chroma 94.5 → 96, ungraded 70.2 → 79.4.
+The grade is `saturation 1.24 / contrast 1.12 / lift 0.02`: the old 1.06 contrast
+with a 0.04 lift greyed every shadow and flattened the facets. The unsharp mask
+runs at 1.15 with an edge gate from 0.003. Authored haze is multiplied by 0.8 in
+`AtmosphereAndPostFX.update` — at full strength a 300 m butte was a pale ghost —
+while the `0.6 / max(viewDistance, 240)` floor still hides the draw cut. The sky
+dome's phases are desert values (deeper zenith, 44–46 % cloud) with a 10th-power
+sun glow at 0.42, so golden hour has a light source in frame. Ground colour
+carries two baked break-up bands: fine grit ±3 % and a broad mottle ±4 % at
+~125 m, because one 2 % grain left the sand as a single brown swatch.
 (2) The fog floor is `0.6 / max(viewDistance, 240)`: at the low preset's 130 m
 draw the old `0.6 / viewDistance` was 0.0046 and turned the mesas into 85% haze
 by 200 m; the cap keeps the draw cut hidden without erasing the country. Never
