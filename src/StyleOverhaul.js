@@ -51,8 +51,11 @@ export const PALETTE = {
 const SKY_PHASES = {
   // Desert skies: a warm band at the horizon, a deeper blue overhead, and less
   // cloud than before — a 62 % cover lid over red rock greyed the whole frame.
-  dawn: { horizon: 0xf7c49c, zenith: 0x9fbcd8, cloudLit: 0xffe6cf, cloudShade: 0x9aa6b6, sun: 0xffc089, cover: 0.44 },
-  golden: { horizon: 0xffcf9e, zenith: 0xa9c8e6, cloudLit: 0xfff3e2, cloudShade: 0xc7a596, sun: 0xfff0cf, cover: 0.46 },
+  // Bright-day reference skies: a pale warm band at the horizon, clean blue
+  // overhead and soft white cloud. The autumn valley is lit by a high sun, not
+  // by a sunset, so both day phases share one cool-to-warm ramp.
+  dawn: { horizon: 0xe7f1f8, zenith: 0x8ec3e8, cloudLit: 0xfff6ea, cloudShade: 0xc9d8e4, sun: 0xffeac2, cover: 0.42 },
+  golden: { horizon: 0xd8ecf8, zenith: 0x74b9e8, cloudLit: 0xffffff, cloudShade: 0xc4d5e2, sun: 0xfff6e0, cover: 0.48 },
   // Darker than a real overcast lid needs to be, because the ground under it is
   // still lit and snow is near-white: a pale sky leaves no silhouette anywhere.
   overcast: { horizon: 0x96a4b1, zenith: 0x6c7a87, cloudLit: 0xb6c1ca, cloudShade: 0x5f6b78, sun: 0x8e9aa6, cover: 0.34 },
@@ -61,16 +64,17 @@ const SKY_PHASES = {
 
 /** Ground colours the terrain's biome lookup should use under the new palette. */
 const BIOME_COLOURS = {
-  trail: 0xd2ab7f,
-  hardpack: 0xeccb9f,
-  mud: 0xb08e68,
-  sand: 0xedbf9c,
+  trail: 0xf7e6c0,
+  hardpack: 0xfff1d2,
+  mud: 0xb59a75,
+  sand: 0xffecc6,
   // Not paper white. Linear tone mapping clips at 1.0 with no highlight
   // roll-off, and a full-white albedo under a 1.35 key plus 1.18 fill was the
   // whole alpine region turning into a blank sheet.
-  snow: 0xdfe8f0,
-  rock: 0xd6a88c,
-  water: 0x5f9aa2,
+  snow: 0xe9eff4,
+  // Grey stone: the reference cliffs are cool weathered granite, not sandstone.
+  rock: 0xc2cad1,
+  water: 0x62c6d4,
 };
 
 /**
@@ -110,10 +114,10 @@ export function applyStylePalette() {
   // One sandstone family for the whole map: the canyon was the reference, and
   // the other three are the same ground under a different sky.
   const regionTints = {
-    meadow: 0xd9ab70,
-    canyon: 0xe0a888,
-    alpine: 0xc49570,
-    coast: 0xe7c79c,
+    meadow: 0xf0cf8b,
+    canyon: 0xefd6a2,
+    alpine: 0xd7dfd2,
+    coast: 0xf2e0ae,
   };
   for (const region of REGIONS) {
     const tint = regionTints[region.id];
@@ -492,12 +496,12 @@ export class StyleOverhaul {
 
     if (atmosphere.sun) {
       atmosphere.sun.color.lerp(this.sunColour, k);
-      atmosphere.sun.intensity = 1.45;
+      atmosphere.sun.intensity = 2.2;
     }
     if (atmosphere.hemisphere) {
       atmosphere.hemisphere.color.lerp(this.skyColour, k);
       atmosphere.hemisphere.groundColor.lerp(this.groundColour, k);
-      atmosphere.hemisphere.intensity = 1.25;
+      atmosphere.hemisphere.intensity = 1.9;
     }
 
     const fog = this.scene?.fog;
@@ -524,7 +528,7 @@ export class StyleOverhaul {
     if (this.renderer) {
       this.renderer.toneMappingExposure = THREE.MathUtils.lerp(
         this.renderer.toneMappingExposure,
-        1.05,
+        1.45,
         k,
       );
     }

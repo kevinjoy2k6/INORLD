@@ -28,16 +28,20 @@ import { WORLD, WATCHTOWERS, GAS_STATIONS, SIGNS, regionAt } from './WorldAtlas.
  *  Palette
  * ------------------------------------------------------------------ */
 
-/** Sandstone strata, bottom to top: oxidised red at the foot, pale caprock. */
+/**
+ * Weathered granite strata, bottom to top: cool shadowed base, pale sunlit cap.
+ * The reference cliffs are grey stone against gold grass and blue water; the old
+ * oxidised-red bands put the rock in a different palette from the country.
+ */
 const STRATA = [
-  0xc99174,
-  0xd69e80,
-  0xcf9678,
-  0xdda889,
-  0xc98c6d,
-  0xe4b596,
-  0xdba687,
-  0xedc9ab,
+  0x98a1a9,
+  0xa6afb6,
+  0x919aa2,
+  0xb3bbc1,
+  0x8d969e,
+  0xbdc4c9,
+  0xa1aab1,
+  0xccd2d7,
 ];
 
 /**
@@ -56,7 +60,9 @@ const PALM_TRUNK = 0x8a6a48;
 const PALM_TRUNK_DARK = 0x6f543a;
 const PALM_FROND = 0x6ba649;
 const PALM_FROND_TIP = 0x8cc35d;
-const SCRUB_COLOURS = [0x77a84a, 0x86b653, 0x92c25c, 0x6b9a45];
+// Autumn scrub: gold, straw and the last green — the bushes in frame 2, not a
+// summer hedgerow.
+const SCRUB_COLOURS = [0xc9a13a, 0xd9b348, 0xa8b04a, 0xb8862f];
 
 /* ------------------------------------------------------------------ *\
  *  Small deterministic RNG, so the country is the same every load and
@@ -314,7 +320,9 @@ export class MesaField {
       ...keepOut.map((p) => ({ x: p.x, z: p.z, r: p.r ?? 64 })),
     ];
     const spawn = terrain?.spawn?.position;
-    if (spawn) this._keepOuts.push({ x: spawn.x, z: spawn.z, r: 110 });
+    // Tight enough that the drop point has rock and scrub in frame, wide
+    // enough that nothing large lands on the truck.
+    if (spawn) this._keepOuts.push({ x: spawn.x, z: spawn.z, r: 60 });
 
     this.group = new THREE.Group();
     this.group.name = 'RedRockCountry';

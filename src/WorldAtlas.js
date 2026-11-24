@@ -38,20 +38,19 @@ export const REGIONS = [
     // Metres: a soft rectangle in the west/centre of the valley.
     bounds: { x: [-320, 40], z: [-170, 60] },
     palette: {
-      // The whole valley is red-rock country now: the meadow is sage grassland
-      // over sandstone, not a green field. Its light stays its own (late dusk),
-      // but the albedo belongs to the same desert as the canyon.
-      ground: 0xa68a5c,
-      groundAlt: 0xc0a170,
+      // Golden autumn grassland: the reference look is a bright, saturated
+      // low-poly valley, not a dusty one. Dry grass over pale earth.
+      ground: 0xd2a54c,
+      groundAlt: 0xe3bd63,
       accent: 0xd9b45e,
-      fog: 0xdcc3ab,
-      skyTint: 0xffae72,
-      sunTint: 0xffd3a6,
-      ambient: 0x5a4a5e,
+      fog: 0xd9e8f4,
+      skyTint: 0xfff2d2,
+      sunTint: 0xfff7e4,
+      ambient: 0x64727f,
       // Under linear tone mapping this value is a straight multiplier on the
       // phase exposure, so the old 1.02 lifted the whole meadow into the haze.
-      exposure: 0.97,
-      bloom: 0.15,
+      exposure: 1.0,
+      bloom: 0.12,
     },
     // Rolling and soft: squash the amplitude of the base noise.
     shape(h, x, z) {
@@ -91,17 +90,17 @@ export const REGIONS = [
     mood: 'late afternoon',
     bounds: { x: [-320, 320], z: [120, 320] },
     palette: {
-      // High red-rock: rust scree under snow, warm haze in the valleys below.
-      ground: 0xa17a5a,
-      groundAlt: 0xe8e0d2,
-      accent: 0x7d5550,
-      fog: 0xd6c2b6,
-      skyTint: 0x8fb9dc,
-      sunTint: 0xffeccd,
-      ambient: 0x51465c,
+      // Alpine meadow under snow: green-grey grass, cool blue haze.
+      ground: 0x9fb08a,
+      groundAlt: 0xe9eff4,
+      accent: 0x7d8f99,
+      fog: 0xd6e6f4,
+      skyTint: 0x9cc9e8,
+      sunTint: 0xfff4dd,
+      ambient: 0x55637a,
       // Snow has no shoulder to roll off under a linear curve: a small pull on
       // exposure is what keeps the ridge faceted instead of paper white.
-      exposure: 0.84,
+      exposure: 0.93,
       bloom: 0.11,
     },
     shape(h, x, z) {
@@ -115,16 +114,16 @@ export const REGIONS = [
     mood: 'high noon',
     bounds: { x: [-320, 320], z: [-320, -170] },
     palette: {
-      // Sun-bleached coral sand at the water's edge; the sea keeps its blue as
-      // the one cool accent left in the palette.
-      ground: 0xd6b083,
-      groundAlt: 0xb78f68,
-      accent: 0x2f7f96,
-      fog: 0xe6cdb6,
-      skyTint: 0x62b0e0,
-      sunTint: 0xfff2d8,
-      ambient: 0x4f5668,
-      exposure: 0.99,
+      // Pale gold beach sand against bright water — the lake shore of the
+      // reference frame rather than a bleached desert.
+      ground: 0xdcc07c,
+      groundAlt: 0xe9d69a,
+      accent: 0x2f9fb4,
+      fog: 0xd8eaf6,
+      skyTint: 0x7fc5ee,
+      sunTint: 0xfff7e6,
+      ambient: 0x5a6878,
+      exposure: 1.0,
       bloom: 0.1,
     },
     // Beach falls away to the sea; the water plane does the rest.
@@ -317,7 +316,10 @@ for (const road of ROADS) {
   road.points = road.points.map(([x, z]) => [x * WORLD_SCALE, z * WORLD_SCALE]);
   // Graded roads widen with the world; trails stay narrow, because the
   // challenge is the line you pick through them.
-  road.width = road.kind === 'road' ? road.width * 1.45 : road.width * 1.05;
+  // Narrower than they were: at 1.45× a graded road painted a 19 m band of
+  // bare earth through the meadow, which reads as a construction site. A
+  // two-track carriageway leaves grass on both shoulders.
+  road.width = road.kind === 'road' ? road.width * 1.0 : road.width * 0.9;
 }
 
 for (const list of [WATCHTOWERS, GAS_STATIONS, SIGNS]) {

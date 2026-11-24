@@ -598,9 +598,12 @@ composer. (1) Grade chroma moved partly into the baked palette: `saturate()`
 raises `BIOME_COLOURS` and every region ground tint by 1.15 in
 `applyStylePalette` (guarded, once), and the grade pass runs at 1.24 instead of
 1.3. Measured on canyon sand: graded chroma 94.5 → 96, ungraded 70.2 → 79.4.
-The grade is `saturation 1.24 / contrast 1.12 / lift 0.02`: the old 1.06 contrast
-with a 0.04 lift greyed every shadow and flattened the facets. The unsharp mask
-runs at 1.15 with an edge gate from 0.003. Authored haze is multiplied by 0.8 in
+The grade is `saturation 1.06 / contrast 1.04 / lift 0.02`: the reference look is a
+bright pastel diorama, and the earlier 1.24 saturation on gold albedo pushed the
+field into mustard and left orange slivers for grass. The unsharp mask runs at
+0.5 with an edge gate from 0.003 — at 1.15 it drew dark halos around every
+pebble and blade. Brightness comes from the light rig instead: sun 2.2 / hemi
+1.9 / exposure 1.45. Authored haze is multiplied by 0.8 in
 `AtmosphereAndPostFX.update` — at full strength a 300 m butte was a pale ghost —
 while the `0.6 / max(viewDistance, 240)` floor still hides the draw cut. The sky
 dome's phases are desert values (deeper zenith, 44–46 % cloud) with a 10th-power
@@ -660,8 +663,10 @@ flattens a corridor along them and Landmarks lines them with poles/signs.
 | `PATH_SPACING` | 40 m | trail sampling |
 | `CHUNKS` | 8 | ground chunks per side (64 total) |
 | `_chunkSize` | 150 m | prop/LOD chunk size |
-| trees / boulders / poles | 1900 / 900 / 260 | scatter counts |
+| trees / boulders / poles | 9000 / 900 / 260 | scatter counts (largest map-wide count the HIGH tier carries) |
+| larches | ~50 % of trees | second stand, own chunk group and collider list, gold crowns |
 | pebbles | 26000 | near-field stone, no colliders, culled at `0.2 ×` view distance |
+| grass | 100000 | blades, 60 % of them within 45 m of a trail |
 
 Unmarked trails: `quarry-switchbacks`, `ridge-traverse`, `river-run`.
 
@@ -1252,6 +1257,7 @@ frame, so read the stats after a render or via `captureRenderStats`.
 | car stability | **suspension solver fixes**: anti-roll bar sign corrected (it was adding roll — a truck parked across a 23° sidehill rolled onto its roof in 4 s, now holds at 24.5° indefinitely), per-corner support clamp raised from `0.45 W` total to the `1.15 W` strut ceiling (two wheels could previously carry only 90 % of the truck), ARB taken from smoothed travel instead of the raw ray, damper shaft speed low-passed at ~30 Hz, lateral stiffness 0.62 → 1.3 (sidehill creep 1.6 → 0.6 m/s), 6 rad/s angular-velocity clamp against solver artefacts. Corner body roll in a 0.85-lock slalom 29° → 17.3°, rough-ground roll 6.2° → 3.3°, top speed and rest jitter unchanged |
 | trailer stability | **yaw/jackknife fixes**: slip-angle trailer tyres replace force-per-m/s lateral grip, overrun brakes stop the 3.4 t trailer pushing through the ball, equal-and-opposite hitch yaw damping (20 000 N·m·s/rad) plus a ~70° stop, filtered trailer suspension and correctly signed anti-roll bars. Loaded 50 km/h slalom 126–180° fold → 6.2–6.3° maximum hitch angle on repeated runs; 50 km/h panic stop straight 15.3 m with 0° fold, braking while turning 16.1°; 70 km/h steer-pulse sway decays to zero; 23° sidehill holds at 24.0° truck / 25.1° trailer with all eight wheels grounded |
 | whole-map desert | **one red-rock country**: every region ground repainted into the canyon's sandstone family, terrain paint lerped 74 % to the region tint, snow confined to the alpine band, palms along the whole river; `MesaField` un-gated from the canyon (24 massifs, 7 hero buttes, 48 lone mesas, 2600 scrub → 127 mesas / 155 palms / 41k stone triangles, still 4 draw calls) with footprint-aware water rejection and keep-outs for landmarks, spawn, mill and bridge; HIGH tier raised to 4096 soft shadows, DPR 2.5, 16× anisotropy, 540 m fog, 512² ground detail |
+| autumn diorama pass | **reference-style palette**: region ground tints and `BIOME_COLOURS` moved from red sandstone to pale gold field / cool granite / turquoise water, `SKY_PHASES` dawn and golden replaced by bright-day blue with soft white cloud, `MesaField` strata and boulders regraded grey, scrub recoloured to gold/straw; a second tree stand (gold larch, own chunk group and collider list) splits the forest ~50/50 with green fir, trees 1900 → 9000, grass 46000 → 100000 biased to the driving corridor, roads narrowed (1.45× → 1.0×) and the spawn keep-out 110 → 60 m so the drop point is not a bare plain; grade softened to 1.06 sat / 1.04 contrast, sharpen 1.15 → 0.5, light raised to sun 2.2 / hemi 1.9 / exposure 1.45 |
 | low-quality path | **desert read without the grade**: fog floor `0.6 / viewDistance` → `0.6 / Math.max(viewDistance, 240)` (at 130 m the old value fogged the mesas to 85% haze by 200 m); palette albedo saturation ×1.15 via `saturate()` in `applyStylePalette` with grade saturation 1.3 → 1.2 — graded frame unchanged (canyon chroma 94.5 → 96.0), ungraded frame +13% chroma (70.2 → 79.4) at the governor's 0.4 pixel ratio |
 | phase audit | **every region × every phase checked under linear tone mapping**: presets no longer latch over the clock (night used to render as golden hour), `PHASES` retuned for a linear curve (golden high-key reference, ambient-dominant overcast with turbidity 16 / Rayleigh 0.5, moonlit night, 9° dawn), sky dome follows `phaseId` via `SKY_PHASES`, night water dimmed to a few percent in linear space, region grading made a stable weight (night `0.02`), alpine snow albedo `0xeef2f5` → `0xdfe8f0` with rock painted onto steep faces, coast/alpine ground tints warmed/cooled to match their regions |
 | low-poly/sharp | **low-poly + crisp pass**: nine-tap unsharp-mask `ShaderPass` (strength 0.9, contrast-gated) after the grade, bloom strength cut across all phases and region palettes (0.34 → 0.16 max) with a 0.32 radius, grade contrast 1.1 → 1.16, five-sided trunks/poles, six-sided pines, 20-facet boulders, all flat-shaded |

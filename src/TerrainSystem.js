@@ -369,7 +369,11 @@ export class TerrainSystem {
     this.random = mulberry32(this.seed ^ 0x9e3779b9);
 
     this.winchAnchors = [];
+    // One collider list per stand (green firs, gold larches). Density thinning
+    // walks a stand's chunks, and a chunk index is an index into that stand's
+    // own collider list — mixing both stands into one list misaligns them.
     this.treeColliders = [];
+    this.autumnColliders = [];
     this.boulderBodies = [];
     // Scenery colliders are streamed in and out of the physics world around the
     // truck (see updateColliders).
@@ -1687,16 +1691,16 @@ export class TerrainSystem {
     const poleGeometry = new THREE.CylinderGeometry(0.13, 0.15, 4.6, 5);
 
     const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x4a3a28, roughness: 0.95, flatShading: true });
-    // Dusty juniper, not rainforest pine: on a red-rock map a saturated green
-    // conifer is the one thing that still reads as "wrong world" in the mirror.
-    const pineMaterial = new THREE.MeshStandardMaterial({ color: 0x4c5c3a, roughness: 0.9, flatShading: true });
-    // Boulders pulled toward the sandstone strata so scattered rock matches the
-    // buttes instead of sitting on the sand as cool grey pebbles.
-    const boulderMaterial = new THREE.MeshStandardMaterial({ color: 0xa08366, roughness: 0.94, flatShading: true });
+    // Two conifer stands: deep green firs and the gold larches that make the
+    // reference frame read as autumn. The mix is per tree, not per region.
+    const pineMaterial = new THREE.MeshStandardMaterial({ color: 0x2f6b46, roughness: 0.9, flatShading: true });
+    const autumnPineMaterial = new THREE.MeshStandardMaterial({ color: 0xd8a52f, roughness: 0.9, flatShading: true });
+    // Boulders match the grey granite of the cliffs, not the sand under them.
+    const boulderMaterial = new THREE.MeshStandardMaterial({ color: 0x9aa3aa, roughness: 0.94, flatShading: true });
     const poleMaterial = new THREE.MeshStandardMaterial({ color: 0x6d5433, roughness: 0.9, flatShading: true });
 
     // Counts scale with the map area, or 2 km reads as an empty plain.
-    const TREES = 1900;
+    const TREES = 9000;
     const BOULDERS = 900;
     const POLES = 260;
     const PEBBLES = 26000;
@@ -1705,6 +1709,8 @@ export class TerrainSystem {
     // chunk afterwards so the renderer can cull them (see _chunkify).
     const trunkMatrices = [];
     const pineMatrices = [];
+    const autumnTrunkMatrices = [];
+    const autumnPineMatrices = [];
     const boulderMatrices = [];
     const poleMatrices = [];
 
@@ -1730,25 +1736,32 @@ export class TerrainSystem {
       if (slope > 0.42) continue;
       if (key === 'mud' || key === 'water' || key === 'sand') continue;
       if (this.waterGrid[index] > 0) continue;
+      // Trees stop at the shoulder. Five metres of clearance left every trail
+      // through the valley a bare corridor; two is enough for the truck.
       const trail = this._trailFieldAt(x, z);
-      if (trail.distance < trail.width + 5) continue;
+      if (trail.distance < trail.width + 2) continue;
 
       const density = fbm(this.noiseD, x * 0.012, z * 0.012, 3);
-      if (density < -0.12 && random() > 0.22) continue;
+      if (density < -0.35 && random() > 0.6) continue;
 
       const height = 0.82 + random() * 0.62;
       const yaw = random() * Math.PI * 2;
 
       quaternion.setFromEuler(new THREE.Euler(0, yaw, 0));
 
+      // Roughly half the stand is larch: gold crowns among the green firs.
+      const autumn = random() < 0.5;
+      const trunks = autumn ? autumnTrunkMatrices : trunkMatrices;
+      const crowns = autumn ? autumnPineMatrices : pineMatrices;
+
       position.set(x, h + 1.6 * height, z);
       scale.set(1, height, 1);
       matrix.compose(position, quaternion, scale);
-      trunkMatrices.push(matrix.clone());
+      trunks.push(matrix.clone());
 
       position.set(x, h + 4.4 * height, z);
       matrix.compose(position, quaternion, scale);
-      pineMatrices.push(matrix.clone());
+      crowns.push(matrix.clone());
 
       const body = new CANNON.Body({ mass: 0, material: this.groundMaterial });
       body.addShape(new CANNON.Box(new CANNON.Vec3(0.3, 1.7 * height, 0.3)));
@@ -1760,7 +1773,7 @@ export class TerrainSystem {
       this._registerPropBody(body, x, z);
 
       this._addAnchor('tree', new THREE.Vector3(x, h, z), 0.45, body, 1.9);
-      this.treeColliders.push(body);
+      (autumn ? this.autumnColliders : this.treeColliders).push(body);
       trees += 1;
     }
 
@@ -1951,6 +1964,22 @@ export class TerrainSystem {
       maxScale: 1.06,
     });
 
+    // The larch stand is its own group: same silhouettes, gold crowns, and its
+    // own far proxy so a distant ridge of gold does not turn green.
+    const farAutumnGeometry = new THREE.ConeGeometry(1.9, 6.4, 4, 1);
+    const farAutumnMaterial = autumnPineMaterial.clone();
+    farAutumnMaterial.flatShading = true;
+    this.autumnChunks = this._chunkify({
+      name: 'Larch',
+      sources: [
+        { geometry: trunkGeometry, material: trunkMaterial, matrices: autumnTrunkMatrices, castShadow: true, receiveShadow: true },
+        { geometry: pineGeometry, material: autumnPineMaterial, matrices: autumnPineMatrices, castShadow: true, receiveShadow: true },
+      ],
+      far: { geometry: farAutumnGeometry, material: farAutumnMaterial },
+      nearScale: 0.52,
+      maxScale: 1.06,
+    });
+
     const boulderChunks = this._chunkify({
       name: 'Boulder',
       sources: [
@@ -1992,12 +2021,19 @@ export class TerrainSystem {
     // Density and culling share these lists.
     this._densityMeshes = [
       ...this.treeChunks.chunks.flatMap((chunk) => chunk.meshes),
+      ...this.autumnChunks.chunks.flatMap((chunk) => chunk.meshes),
       ...boulderChunks.chunks.flatMap((chunk) => chunk.meshes),
       ...pebbleChunks.chunks.flatMap((chunk) => chunk.meshes),
       ...this.poleChunks.chunks.flatMap((chunk) => chunk.meshes),
     ];
     this.treeMeshes = { chunks: this.treeChunks.chunks };
-    this.props = { treeChunks: this.treeChunks, boulderChunks, pebbleChunks, poleChunks: this.poleChunks };
+    this.props = {
+      treeChunks: this.treeChunks,
+      autumnChunks: this.autumnChunks,
+      boulderChunks,
+      pebbleChunks,
+      poleChunks: this.poleChunks,
+    };
   }
 
   /* ---------------- Phase 7: living wilderness ---------------- */
@@ -2216,9 +2252,12 @@ export class TerrainSystem {
     };
 
     /* --- tall prairie grass --- */
-    const grassGeo = createGrassTuftGeometry(1.35, 0.09);
+    const grassGeo = createGrassTuftGeometry(0.62, 0.05);
+    // White albedo: the blade's colour is the root-to-tip tint ramp in the
+    // patch above. Multiplying a gold material by a gold tint turned every
+    // blade into a deep orange sliver.
     const grassMat = new THREE.MeshStandardMaterial({
-      color: 0x93914b,
+      color: 0xffffff,
       roughness: 0.92,
       metalness: 0,
       side: THREE.DoubleSide,
@@ -2227,14 +2266,17 @@ export class TerrainSystem {
       // leaves the meadow a field of hard dark facets.
       flatShading: false,
     });
-    grassMat.userData.baseColor = new THREE.Color(0x93914b);
+    grassMat.userData.baseColor = new THREE.Color(0xcdb277);
     this._patchFoliageMaterial(grassMat, {
       sway: 0.4,
       rootY: 0,
-      topY: 1.35,
+      topY: 0.62,
       bend: 0.72,
-      rootTint: '#8d8a45',
-      tipTint: '#e8cf8d',
+      // Short, fine and close in value to the soil: the reference field is a
+      // continuous golden pelt, not a scatter of orange spikes. Tall saturated
+      // blades against a dark floor is what made the meadow read as sticks.
+      rootTint: '#b3964f',
+      tipTint: '#dfc37c',
       softenNormal: 0.82,
     });
 
@@ -2242,14 +2284,19 @@ export class TerrainSystem {
     // meadow reads as bare ground with a few spikes on it. Grass is one
     // instanced draw of six triangles per blade and casts no shadow, so the
     // count can go up an order of magnitude for almost nothing.
-    const grass = await makePatch('grass', grassGeo, grassMat, 46000, ({ h, key, slope, density, random }) => {
+    const grass = await makePatch('grass', grassGeo, grassMat, 100000, ({ x, z, h, key, slope, density, random }) => {
       if (h < 3.4 || h > 34) return false;
       if (slope > 0.45) return false;
       if (key === 'water' || key === 'rock' || key === 'mud' || key === 'snow') return false;
-      // Clump into drifts rather than spraying evenly: bare earth shows
-      // between stands, which is what breaks up the flat ochre.
-      const drift = density > -0.02 ? 0.96 : 0.35;
-      return random() < (key === 'trail' ? 0.45 : drift);
+      // The whole map gets blades, but the driving corridor gets most of them:
+      // the camera never sees the far field closely enough for its grass to
+      // matter, and the 40 m beside the track is on screen every frame.
+      const trail = this._trailFieldAt(x, z);
+      if (trail.distance > 45 && random() < 0.6) return false;
+      // Clump into drifts rather than spraying evenly, but keep the sparse
+      // stands dense enough that bare earth only shows in patches.
+      const drift = density > -0.02 ? 0.98 : 0.6;
+      return random() < (key === 'trail' ? 0.8 : drift);
     });
 
     /* --- ferns in the damp, shaded spots --- */
@@ -2385,24 +2432,29 @@ export class TerrainSystem {
 
     // Trees thin out per chunk, and each hidden instance takes its collider
     // with it, so nobody can drive into a trunk that is not being drawn.
-    const activeTree = new Uint8Array(this.stats.trees);
-    for (const chunk of this.treeChunks?.chunks || []) {
-      const n = chunk.indices.length;
-      const keep = Math.floor(n * d);
-      for (const mesh of chunk.meshes) {
-        mesh.count = keep;
-        mesh.userData.active = keep > 0;
+    for (const [group, colliders] of [
+      [this.treeChunks, this.treeColliders],
+      [this.autumnChunks, this.autumnColliders],
+    ]) {
+      const activeTree = new Uint8Array(colliders.length);
+      for (const chunk of group?.chunks || []) {
+        const n = chunk.indices.length;
+        const keep = Math.floor(n * d);
+        for (const mesh of chunk.meshes) {
+          mesh.count = keep;
+          mesh.userData.active = keep > 0;
+        }
+        for (const mesh of chunk.farMeshes) mesh.count = keep;
+        for (let k = 0; k < keep; k += 1) activeTree[chunk.indices[k]] = 1;
       }
-      for (const mesh of chunk.farMeshes) mesh.count = keep;
-      for (let k = 0; k < keep; k += 1) activeTree[chunk.indices[k]] = 1;
-    }
 
-    for (let i = 0; i < this.treeColliders.length; i += 1) {
-      const active = i < activeTree.length ? activeTree[i] === 1 : true;
-      const body = this.treeColliders[i];
-      if (body.collisionResponse !== active) {
-        body.collisionResponse = active;
-        body.collisionFilterGroup = active ? 1 : 0;
+      for (let i = 0; i < colliders.length; i += 1) {
+        const active = i < activeTree.length ? activeTree[i] === 1 : true;
+        const body = colliders[i];
+        if (body.collisionResponse !== active) {
+          body.collisionResponse = active;
+          body.collisionFilterGroup = active ? 1 : 0;
+        }
       }
     }
     this.stats.foliageVisible = this._foliageMeshes.reduce((sum, mesh) => sum + mesh.count, 0);

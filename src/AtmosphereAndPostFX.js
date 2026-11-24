@@ -149,7 +149,7 @@ const SHARPEN_SHADER = {
   uniforms: {
     tDiffuse: { value: null },
     uTexel: { value: new THREE.Vector2(1 / 1280, 1 / 720) },
-    uStrength: { value: 1.15 },
+    uStrength: { value: 0.5 },
   },
   vertexShader: /* glsl */ `
     varying vec2 vUv;
@@ -344,10 +344,10 @@ export class AtmosphereAndPostFX {
         // Part of the grade's chroma now lives in the baked palette so the
         // no-post path keeps it. Measured back: palette ×1.15 plus 1.2 here
         // reproduces the old 1.3 on screen (chroma 94 → 95 on canyon sand).
-        saturation: { value: 1.24 },
+        saturation: { value: 1.06 },
         // More punch, less lift: a 0.04 lift on every channel was washing the
         // shadows grey and flattening the facets the style depends on.
-        contrast: { value: 1.12 },
+        contrast: { value: 1.04 },
         lift: { value: 0.02 },
         warm: { value: new THREE.Vector3(1.04, 1.0, 0.94) },
         cool: { value: new THREE.Vector3(0.93, 0.98, 1.09) },
