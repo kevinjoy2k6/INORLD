@@ -111,7 +111,7 @@ export class CollisionAudio {
     thud.stop(now + 0.3);
 
     // Sheet metal: band-passed noise burst. Heavier hits ring lower.
-    const metal = this.mixer.noise();
+    const metal = this.mixer.noise(now);
     const band = ctx.createBiquadFilter();
     band.type = 'bandpass';
     band.frequency.setValueAtTime(1500 - strength * 600 + Math.random() * 300, now);
@@ -119,7 +119,6 @@ export class CollisionAudio {
     const metalGain = ctx.createGain();
     oneShotEnvelope(metalGain, now, 0.1 + strength * 0.2, 0.003, 0.18 + strength * 0.2);
     metal.connect(band).connect(metalGain).connect(this.mixer.busInputs.mechanical);
-    metal.start(now);
     this.mixer.track(metal, now + 0.45);
   }
 
@@ -136,7 +135,7 @@ export class CollisionAudio {
       return;
     }
 
-    const src = this.mixer.noise();
+    const src = this.mixer.noise(now);
     const band = ctx.createBiquadFilter();
     band.type = 'bandpass';
     band.frequency.value = 900 + Math.random() * 900;
@@ -144,7 +143,6 @@ export class CollisionAudio {
     const gain = ctx.createGain();
     oneShotEnvelope(gain, now, 0.05 + strength * 0.1, 0.002, 0.07);
     src.connect(band).connect(gain).connect(this.mixer.busInputs.mechanical);
-    src.start(now);
     this.mixer.track(src, now + 0.1);
   }
 

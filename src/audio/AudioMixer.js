@@ -168,12 +168,20 @@ export class AudioMixer {
     return this.ctx ? this.ctx.currentTime : 0;
   }
 
-  /** Looping noise source, already started. Callers own the node graph after. */
-  noise() {
+  /**
+   * Looping noise source, started here exactly once. Callers own the node graph
+   * after this, but must never call start() on it again: Web Audio throws
+   * "cannot call start more than once" and that error used to reach the fatal
+   * overlay the first time an impact, splash or thunder fired.
+   *
+   * One-shots that need the burst to begin with their envelope pass `startAt`
+   * (normally `ctx.currentTime`); omitting it starts the loop immediately.
+   */
+  noise(startAt = 0) {
     const src = this.ctx.createBufferSource();
     src.buffer = this.noiseBuffer;
     src.loop = true;
-    src.start();
+    src.start(Number.isFinite(startAt) ? startAt : 0);
     return src;
   }
 

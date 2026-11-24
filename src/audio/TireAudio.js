@@ -219,7 +219,7 @@ export class TireAudio {
   _splash(index, strength) {
     const ctx = this.ctx;
     const now = ctx.currentTime;
-    const src = this.mixer.noise();
+    const src = this.mixer.noise(now);
     const band = ctx.createBiquadFilter();
     band.type = 'bandpass';
     band.frequency.setValueAtTime(1500, now);
@@ -228,7 +228,6 @@ export class TireAudio {
     const gain = ctx.createGain();
     oneShotEnvelope(gain, now, 0.1 + strength * 0.16, 0.01, 0.4);
     src.connect(band).connect(gain).connect(this.mixer.busInputs.tyres);
-    src.start(now);
     this.mixer.track(src, now + 0.45);
   }
 

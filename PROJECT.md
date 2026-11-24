@@ -1034,6 +1034,11 @@ One `AudioContext`, one bus tree (`engine`, `drivetrain`, `tyres`, `mechanical`,
   stochastic thunder, stream proximity.
 - Sample slots live in `assets/audio/manifest.json` (`engine.*`, `tyre.*`,
   `impact.body`, `impact.tick`); 48 kHz / 24-bit, seamless loops, ≈ −3 dBFS.
+- `mixer.noise(startAt)` is the only way to get a noise source: it starts the
+  loop exactly once, at `startAt` (default: immediately). One-shot bursts pass
+  `ctx.currentTime` so the noise begins with its envelope. Never call `start()`
+  on the returned node — Web Audio throws `InvalidStateError` and that used to
+  reach the fatal overlay.
 - `?audiolab` runs `AudioLab`: IDLE → REV → SHIFT → BRAKE → WHEELSPIN → GRAVEL →
   IMPACT → CABIN with per-bus peak metering and clipping counts.
 
@@ -1173,6 +1178,12 @@ frame, so read the stats after a render or via `captureRenderStats`.
 16. **A lost GPU is explained, not frozen.** `webglcontextlost` prevents the
     default and shows the fatal overlay with a reload instruction; settings are
     persisted, so a reload always recovers the player's configuration.
+17. **An audio node is started once.** `AudioMixer.noise(startAt)` starts the
+    shared noise loop itself; callers schedule it by passing a time, never by
+    calling `start()` a second time (`InvalidStateError: cannot call start more
+    than once`, which reached the fatal overlay mid-drive). The same rule covers
+    oscillators and buffer sources: build a new node per one-shot, or start the
+    existing one exactly once.
 
 ---
 

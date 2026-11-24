@@ -108,14 +108,13 @@ export class TransmissionAudio {
     osc.stop(now + 0.2);
 
     // Synchro tick.
-    const tick = this.mixer.noise();
+    const tick = this.mixer.noise(now);
     const tickHigh = ctx.createBiquadFilter();
     tickHigh.type = 'highpass';
     tickHigh.frequency.value = 2200;
     const tickGain = ctx.createGain();
     oneShotEnvelope(tickGain, now + 0.01, 0.08 * strength, 0.003, 0.05);
     tick.connect(tickHigh).connect(tickGain).connect(this.mixer.busInputs.drivetrain);
-    tick.start(now);
     this.mixer.track(tick, now + 0.08);
 
     this._lastGear = to ?? gearIndex;

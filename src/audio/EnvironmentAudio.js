@@ -163,7 +163,7 @@ export class EnvironmentAudio {
   _thunder() {
     const ctx = this.ctx;
     const now = ctx.currentTime;
-    const src = this.mixer.noise();
+    const src = this.mixer.noise(now);
 
     const low = ctx.createBiquadFilter();
     low.type = 'lowpass';
@@ -177,7 +177,6 @@ export class EnvironmentAudio {
     gain.gain.exponentialRampToValueAtTime(0.0001, now + 3.2);
 
     src.connect(low).connect(gain).connect(this.mixer.busInputs.ambience);
-    src.start(now);
     this.mixer.track(src, now + 3.3);
   }
 }

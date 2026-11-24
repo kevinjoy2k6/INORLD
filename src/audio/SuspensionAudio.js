@@ -155,7 +155,7 @@ export class SuspensionAudio {
     osc.start(now);
     osc.stop(now + 0.28);
 
-    const tick = this.mixer.noise();
+    const tick = this.mixer.noise(now);
     const band = ctx.createBiquadFilter();
     band.type = 'bandpass';
     band.frequency.value = 1500;
@@ -163,7 +163,6 @@ export class SuspensionAudio {
     const tickGain = ctx.createGain();
     oneShotEnvelope(tickGain, now, 0.07, 0.003, 0.09);
     tick.connect(band).connect(tickGain).connect(this.mixer.busInputs.mechanical);
-    tick.start(now);
     this.mixer.track(tick, now + 0.12);
   }
 }

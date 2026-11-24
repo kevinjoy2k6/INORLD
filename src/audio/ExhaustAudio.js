@@ -82,7 +82,7 @@ export class ExhaustAudio {
   _crackle(strength) {
     const ctx = this.ctx;
     const now = ctx.currentTime;
-    const src = this.mixer.noise();
+    const src = this.mixer.noise(now);
     const band = ctx.createBiquadFilter();
     band.type = 'bandpass';
     band.frequency.value = 320 + Math.random() * 520;
@@ -90,7 +90,6 @@ export class ExhaustAudio {
     const gain = ctx.createGain();
     oneShotEnvelope(gain, now, 0.05 + strength * 0.07 + Math.random() * 0.02, 0.004, 0.05 + Math.random() * 0.05);
     src.connect(band).connect(gain).connect(this.out);
-    src.start(now);
     this.mixer.track(src, now + 0.12);
   }
 
