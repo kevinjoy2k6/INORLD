@@ -22,7 +22,7 @@
 
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
-import { REGIONS } from './WorldAtlas.js';
+import { WORLD, WATCHTOWERS, GAS_STATIONS, SIGNS, regionAt } from './WorldAtlas.js';
 
 /* ------------------------------------------------------------------ *\
  *  Palette
@@ -297,11 +297,24 @@ function appendPalm(soup, random, { x, y, z, scale, lean = 0 }) {
  * ------------------------------------------------------------------ */
 
 export class MesaField {
-  constructor({ scene, terrain, world = null, seed = 0x5eed1a }) {
+  constructor({ scene, terrain, world = null, seed = 0x5eed1a, keepOut = [] }) {
     this.scene = scene;
     this.terrain = terrain;
     this.world = world;
     this.random = mulberry32(seed);
+
+    // Rock is for the whole map now, so it has to respect everything that was
+    // already placed: landmarks, the mill and bridge, and the spawn where the
+    // truck is dropped in. A butte through a watchtower or over the start is
+    // the failure mode this list exists to prevent.
+    this._keepOuts = [
+      ...WATCHTOWERS.map((p) => ({ x: p.x, z: p.z, r: 52 })),
+      ...GAS_STATIONS.map((p) => ({ x: p.x, z: p.z, r: 44 })),
+      ...SIGNS.map((p) => ({ x: p.x, z: p.z, r: 24 })),
+      ...keepOut.map((p) => ({ x: p.x, z: p.z, r: p.r ?? 64 })),
+    ];
+    const spawn = terrain?.spawn?.position;
+    if (spawn) this._keepOuts.push({ x: spawn.x, z: spawn.z, r: 110 });
 
     this.group = new THREE.Group();
     this.group.name = 'RedRockCountry';
@@ -315,7 +328,6 @@ export class MesaField {
     this._stoneMaterial = new THREE.MeshLambertMaterial({
       vertexColors: true,
       flatShading: true,
-      roughness: 1,
     });
 
     this._buildMesas();
@@ -347,26 +359,34 @@ export class MesaField {
     return field ? field.distance - field.width : 1e9;
   }
 
-  _insideCanyon(x, z) {
-    const canyon = REGIONS.find((region) => region.id === 'canyon');
-    if (!canyon) return false;
-    const [x0, x1] = canyon.bounds.x;
-    const [z0, z1] = canyon.bounds.z;
-    return x >= x0 + 40 && x <= x1 - 40 && z >= z0 + 40 && z <= z1 - 40;
+  /** The canyon band, used only to keep palms out of the snow. */
+  _isAlpine(x, z) {
+    return regionAt(x, z).id === 'alpine';
   }
 
-  /** Big rock is allowed near the river; it just must not stand in it. */
+  /**
+   * Big rock is allowed near the river; it just must not stand in it, block a
+   * road, bury a landmark or land on the start. Nothing is region-gated any
+   * more: the mesas are the map, not a corner of it.
+   */
   _canPlaceMesa(x, z, radius) {
-    if (!this._insideCanyon(x, z)) return false;
-    if (this._wet(x, z)) return false;
+    const limit = WORLD.half - radius - 24;
+    if (Math.abs(x) > limit || Math.abs(z) > limit) return false;
+    // Test the footprint, not just the centre: a 30 m butte whose centre sits
+    // 10 m from the bank still stands in the river with its talus skirt.
+    const ring = radius * 0.6;
+    for (const [dx, dz] of [[0, 0], [ring, 0], [-ring, 0], [0, ring], [0, -ring]]) {
+      if (this._wet(x + dx, z + dz)) return false;
+      if (this._height(x + dx, z + dz) < this.terrain.waterLevel + 1.2) return false;
+    }
     const height = this._height(x, z);
-    if (height < this.terrain.waterLevel + 1.2) return false;
-    // Keep the graded corridor clear: a butte across the canyon road would be
-    // a wall the truck cannot grade around, and the atlas says the road loops
-    // the basin.
+    // Keep every graded corridor clear: a butte across a road is a wall the
+    // truck cannot grade around.
     if (this._trailDistance(x, z) < 18 + radius * 0.55) return false;
-    // The stone keeps occupy the watchtower sites; do not bury a landmark.
     if (this.terrain.inProvingGround && this.terrain.inProvingGround(x, z)) return false;
+    for (const keep of this._keepOuts) {
+      if (Math.hypot(x - keep.x, z - keep.z) < keep.r + radius) return false;
+    }
     return true;
   }
 
@@ -377,22 +397,23 @@ export class MesaField {
     const soup = new TriangleSoup();
     const colliders = [];
 
-    // Massifs first: overlapping buttes read as one walled basin, which is the
-    // shape the red-rock country is supposed to have. A lone butte on a plain
-    // reads as a rock, not a canyon.
-    const clusters = 9;
+    // Massifs first: overlapping buttes read as one walled country, and the
+    // country now runs to every edge of the map. A lone butte on a plain reads
+    // as a rock, not as red rock.
+    const clusters = 24;
     for (let c = 0; c < clusters; c += 1) {
       let placed = false;
       // The first clusters are pinned to the river corridor, so the basin has
-      // cliffs framing the water instead of mesas scattered across the map.
-      const riverside = c < 5;
-      for (let attempt = 0; attempt < 90 && !placed; attempt += 1) {
-        const rx = 220 + random() * 700;
+      // cliffs framing the water; the rest are spread across all four regions,
+      // which is what stopped the west and the coast looking like an empty map.
+      const riverside = c < 10;
+      for (let attempt = 0; attempt < 130 && !placed; attempt += 1) {
+        const rx = 200 + random() * 780;
         const spread = riverside ? 70 + random() * 80 : 240;
-        const x = riverside ? rx : 180 + random() * 780;
+        const x = riverside ? rx : -WORLD.half + 90 + random() * (WORLD.half * 2 - 180);
         const z = riverside
           ? this.terrain.riverZ(rx) + (random() < 0.5 ? -1 : 1) * spread
-          : -480 + random() * 800;
+          : -WORLD.half + 90 + random() * (WORLD.half * 2 - 180);
         if (!this._canPlaceMesa(x, z, 50)) continue;
         placed = true;
         const members = 2 + Math.floor(random() * 3);
@@ -408,12 +429,14 @@ export class MesaField {
       }
     }
 
-    // Hero buttes: one wall of rock close enough to the water to fill a third
-    // of the frame. The reference composition depends on one near cliff giving
-    // scale to everything behind it, and clusters alone never provide that.
-    for (let i = 0; i < 4; i += 1) {
-      for (let attempt = 0; attempt < 80; attempt += 1) {
-        const x = 300 + random() * 520;
+    // Hero buttes: one wall of rock close enough to fill a third of the frame.
+    // The composition depends on a near cliff giving scale to everything behind
+    // it, and clusters alone never provide that. Seven of them, spread along the
+    // river from the coast reach to the canyon, so wherever you stop there is
+    // something with scale in view.
+    for (let i = 0; i < 7; i += 1) {
+      for (let attempt = 0; attempt < 110; attempt += 1) {
+        const x = -WORLD.half + 140 + random() * (WORLD.half * 2 - 280);
         const riverZ = this.terrain.riverZ(x);
         const side = i % 2 === 0 ? -1 : 1;
         const z = riverZ + side * (95 + random() * 70);
@@ -424,15 +447,26 @@ export class MesaField {
       }
     }
 
-    // A handful of lone mesas out in the washes, for scale cues between them.
-    for (let i = 0; i < 14; i += 1) {
-      for (let attempt = 0; attempt < 40; attempt += 1) {
-        const x = 160 + random() * 820;
-        const z = -500 + random() * 840;
-        const radius = 12 + random() * 16;
-        if (!this._canPlaceMesa(x, z, radius)) continue;
-        this._addMesa(soup, x, z, radius, 16 + random() * 26, colliders);
-        break;
+    // Lone mesas on a jittered grid, one candidate per cell. Pure rejection
+    // sampling left 600 m stretches with no rock at all — which is why the
+    // coast and the meadow still read as empty ground from the driver's seat.
+    // A grid guarantees rock in every part of the map, with the occasional cell
+    // left open as a wash.
+    const CELLS = 12;
+    const cell = (WORLD.half * 2) / CELLS;
+    for (let gz = 0; gz < CELLS; gz += 1) {
+      for (let gx = 0; gx < CELLS; gx += 1) {
+        if (random() > 0.45) continue; // some cells stay open ground
+        const radius = 12 + random() * 18;
+        const height = 16 + random() * 28;
+        let placed = false;
+        for (let attempt = 0; attempt < 3 && !placed; attempt += 1) {
+          const x = -WORLD.half + (gx + 0.15 + random() * 0.7) * cell;
+          const z = -WORLD.half + (gz + 0.15 + random() * 0.7) * cell;
+          if (!this._canPlaceMesa(x, z, radius)) continue;
+          this._addMesa(soup, x, z, radius, height, colliders);
+          placed = true;
+        }
       }
     }
 
@@ -515,11 +549,15 @@ export class MesaField {
     // Five oasis hearts on the canyon reach of the river, then palms scattered
     // along both banks between them. The river is the only reliable water in
     // the basin, so everything green is pinned to it.
+    // Palms follow the river for its whole length now — the water is the only
+    // green on the map, so it reads as one oasis corridor rather than a canyon
+    // feature. The alpine reach is excluded: palms under snow would break the
+    // one thing that still separates the ridge from the rest.
     const oases = [];
-    for (let i = 0; i < 5; i += 1) {
-      for (let attempt = 0; attempt < 60; attempt += 1) {
-        const x = 200 + random() * 700;
-        if (!this._insideCanyon(x, 0)) continue;
+    for (let i = 0; i < 9; i += 1) {
+      for (let attempt = 0; attempt < 70; attempt += 1) {
+        const x = -WORLD.half + 140 + random() * (WORLD.half * 2 - 280);
+        if (this._isAlpine(x, 0)) continue;
         const riverZ = this.terrain.riverZ(x);
         const side = random() < 0.5 ? -1 : 1;
         const z = riverZ + side * (12 + random() * 18);
@@ -531,6 +569,7 @@ export class MesaField {
 
     const addPalm = (x, z, scale) => {
       if (this._wet(x, z)) return false;
+      if (this._isAlpine(x, z)) return false;
       // Palms lean out about a crown-width, and the camera rides a few metres
       // behind the truck: keep the groves clear of the driving line so a frond
       // never fills the screen on the way past.
@@ -556,9 +595,9 @@ export class MesaField {
     }
 
     // Loose palms following the water, so the river reads as a living corridor
-    // rather than five isolated clumps.
-    for (let i = 0; i < 90; i += 1) {
-      const x = 170 + random() * 800;
+    // rather than a handful of isolated clumps.
+    for (let i = 0; i < 150; i += 1) {
+      const x = -WORLD.half + 140 + random() * (WORLD.half * 2 - 280);
       const riverZ = this.terrain.riverZ(x);
       const side = random() < 0.5 ? -1 : 1;
       const z = riverZ + side * (8 + random() * 16);
@@ -615,7 +654,9 @@ export class MesaField {
    */
   _buildScrub() {
     const random = this.random;
-    const COUNT = 1500;
+    // Twice the scrub, over the whole map instead of the canyon alone: on a
+    // 2 km square, a few hundred bushes were a detail you had to look for.
+    const COUNT = 2600;
     const geometry = new THREE.IcosahedronGeometry(1, 0);
     const material = new THREE.MeshLambertMaterial({ flatShading: true });
     const mesh = new THREE.InstancedMesh(geometry, material, COUNT);
@@ -630,12 +671,17 @@ export class MesaField {
     const color = new THREE.Color();
 
     let placed = 0;
-    for (let attempt = 0; attempt < COUNT * 12 && placed < COUNT; attempt += 1) {
-      const x = 120 + random() * 900;
-      const z = -520 + random() * 880;
-      if (!this._insideCanyon(x, z)) continue;
+    for (let attempt = 0; attempt < COUNT * 14 && placed < COUNT; attempt += 1) {
+      const x = -WORLD.half + 60 + random() * (WORLD.half * 2 - 120);
+      const z = -WORLD.half + 60 + random() * (WORLD.half * 2 - 120);
       if (this._wet(x, z)) continue;
       if (this._trailDistance(x, z) < 3.5) continue;
+      let nearBuilding = false;
+      for (const keep of this._keepOuts) {
+        if (keep.r < 30) continue; // signs and posts: a bush beside them is fine
+        if (Math.hypot(x - keep.x, z - keep.z) < keep.r * 0.7) { nearBuilding = true; break; }
+      }
+      if (nearBuilding) continue;
       // Clumped, the way scrub grows: bare sand between thickets.
       const density = Math.sin(x * 0.021) * Math.cos(z * 0.017) + Math.sin(x * 0.006 + z * 0.008);
       if (density < -0.35 && random() > 0.2) continue;

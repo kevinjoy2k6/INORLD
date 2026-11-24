@@ -105,11 +105,13 @@ export function applyStylePalette() {
   // Ground tints: the canyon is sun-bleached sand and oxidised red rock, not
   // pure orange. The rock gets its colour from MesaField's strata; the ground
   // under it has to be pale enough for the strata to sit on top of.
+  // One sandstone family for the whole map: the canyon was the reference, and
+  // the other three are the same ground under a different sky.
   const regionTints = {
-    meadow: 0xe9b667,
+    meadow: 0xd9ab70,
     canyon: 0xe0a888,
-    alpine: 0x9fb4c6,
-    coast: 0xefd9b3,
+    alpine: 0xc49570,
+    coast: 0xe7c79c,
   };
   for (const region of REGIONS) {
     const tint = regionTints[region.id];

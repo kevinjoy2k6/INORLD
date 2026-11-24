@@ -1118,7 +1118,9 @@ export class TerrainSystem {
   /* ---------------- visual mesh ---------------- */
 
   _buildDetailTexture() {
-    const size = 256;
+    // 512, not 256: the ground fills most of the screen and this is the only
+    // texture on it, so the extra grain is where the resolution actually shows.
+    const size = 512;
     const canvas = document.createElement('canvas');
     canvas.width = size;
     canvas.height = size;
@@ -1175,11 +1177,13 @@ export class TerrainSystem {
         const def = BIOMES[key];
         color.setHex(def.color);
 
-        // Region palette: the meadow reads olive-gold, the canyon rust,
-        // the coast bleached sand, the ridge cold grey-green.
+        // Region palette: one sandstone family across the whole map, with each
+        // region's own light on top of it (see WorldAtlas). The stronger lerp
+        // keeps a green or grey biome colour from breaking the desert wherever
+        // a region border crosses a slope.
         const region = regionAt(x, z);
         if (key !== 'water' && key !== 'mud') {
-          color.lerp(tint.setHex(region.palette.ground), key === 'trail' ? 0.28 : 0.62);
+          color.lerp(tint.setHex(region.palette.ground), key === 'trail' ? 0.32 : 0.74);
         }
 
         // The trail itself: bare packed earth worn through the grass, fading
@@ -1200,8 +1204,10 @@ export class TerrainSystem {
           }
         }
 
-        // Blend snow in over the alpine band, and grit into everything else.
-        const snowBlend = smoothstep(30, 52, h);
+        // Snow only where the alpine ridge owns the ground. An altitude-only
+        // rule whitened the meadow's hills too, which read as fog damage once
+        // the rest of the map became red rock.
+        const snowBlend = region.id === 'alpine' ? smoothstep(30, 52, h) : 0;
         if (snowBlend > 0 && key !== 'snow') color.lerp(tint.setHex(BIOMES.snow.color), snowBlend * 0.85);
 
         // Alpine faces: snow only holds on the shallows, and a uniform white
@@ -1210,7 +1216,7 @@ export class TerrainSystem {
         // still owns grip, sinkage and the spray the tyres throw.
         if (key === 'snow' && region.id === 'alpine') {
           const rockFace = smoothstep(0.28, 0.75, this.slopeGrid[index]);
-          color.lerp(tint.setHex(0x6f7c88), rockFace * 0.75);
+          color.lerp(tint.setHex(0x8a6b57), rockFace * 0.75);
         }
 
         // Flat-shaded style: no per-pixel ground noise. A 2% break-up only
@@ -1218,17 +1224,14 @@ export class TerrainSystem {
         const grit = 0.98 + (this.noiseD(x * 0.045, z * 0.045) * 0.5 + 0.5) * 0.04;
         color.multiplyScalar(grit);
 
-        // Broad green patches through the gold. Without this the meadow is one
-        // flat ochre field; with it the ground reads as grassland with damp
-        // hollows, in two flat tone bands rather than a gradient.
+        // Broad sage patches through the sand. The ground stays desert; the
+        // green is sparse scrub cover, the same weight in every region, so a
+        // drive across the map never crosses into a different-looking world.
         if (key !== 'water' && key !== 'mud' && key !== 'snow' && key !== 'trail') {
-          // In the red-rock country the ground stays sand and the green lives
-          // in the scrub, so the patch blend is softer and warmer there.
-          const canyon = region.id === 'canyon';
           const patch = this.noiseD(x * 0.012 + 40, z * 0.012 - 15);
           const green = THREE.MathUtils.clamp((patch + 0.22) * 1.9, 0, 1);
           if (green > 0) {
-            color.lerp(tint.setHex(canyon ? 0x8a9a53 : 0x6f8d43), green * (canyon ? 0.24 : 0.5));
+            color.lerp(tint.setHex(0x8a9a53), green * 0.26);
           }
         }
 
@@ -1682,8 +1685,12 @@ export class TerrainSystem {
     const poleGeometry = new THREE.CylinderGeometry(0.13, 0.15, 4.6, 5);
 
     const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x4a3a28, roughness: 0.95, flatShading: true });
-    const pineMaterial = new THREE.MeshStandardMaterial({ color: 0x2c4a32, roughness: 0.9, flatShading: true });
-    const boulderMaterial = new THREE.MeshStandardMaterial({ color: 0x9c8571, roughness: 0.94, flatShading: true });
+    // Dusty juniper, not rainforest pine: on a red-rock map a saturated green
+    // conifer is the one thing that still reads as "wrong world" in the mirror.
+    const pineMaterial = new THREE.MeshStandardMaterial({ color: 0x4c5c3a, roughness: 0.9, flatShading: true });
+    // Boulders pulled toward the sandstone strata so scattered rock matches the
+    // buttes instead of sitting on the sand as cool grey pebbles.
+    const boulderMaterial = new THREE.MeshStandardMaterial({ color: 0xa08366, roughness: 0.94, flatShading: true });
     const poleMaterial = new THREE.MeshStandardMaterial({ color: 0x6d5433, roughness: 0.9, flatShading: true });
 
     // Counts scale with the map area, or 2 km reads as an empty plain.
@@ -2155,7 +2162,7 @@ export class TerrainSystem {
     /* --- tall prairie grass --- */
     const grassGeo = createGrassTuftGeometry(1.35, 0.09);
     const grassMat = new THREE.MeshStandardMaterial({
-      color: 0x8a9a4a,
+      color: 0x93914b,
       roughness: 0.92,
       metalness: 0,
       side: THREE.DoubleSide,
@@ -2164,14 +2171,14 @@ export class TerrainSystem {
       // leaves the meadow a field of hard dark facets.
       flatShading: false,
     });
-    grassMat.userData.baseColor = new THREE.Color(0x8a9a4a);
+    grassMat.userData.baseColor = new THREE.Color(0x93914b);
     this._patchFoliageMaterial(grassMat, {
       sway: 0.4,
       rootY: 0,
       topY: 1.35,
       bend: 0.72,
-      rootTint: '#8a8f3e',
-      tipTint: '#ffe08a',
+      rootTint: '#8d8a45',
+      tipTint: '#e8cf8d',
       softenNormal: 0.82,
     });
 
@@ -2194,12 +2201,12 @@ export class TerrainSystem {
     fernGeo.scale(1.25, 0.5, 1.25);
     fernGeo.translate(0, 0.22, 0);
     const fernMat = new THREE.MeshStandardMaterial({
-      color: 0x4f7a3a,
+      color: 0x6d7a45,
       roughness: 0.88,
       side: THREE.DoubleSide,
       flatShading: true,
     });
-    fernMat.userData.baseColor = new THREE.Color(0x4f7a3a);
+    fernMat.userData.baseColor = new THREE.Color(0x6d7a45);
     this._patchFoliageMaterial(fernMat, {
       sway: 0.16,
       rootY: 0,

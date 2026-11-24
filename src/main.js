@@ -485,7 +485,16 @@ window.__poi = pointsOfInterest;
 // The red-rock country itself: terraced buttes, palm oases on the river and
 // scrub on the flats. Scenery only — the heightfield and its physics are
 // untouched, so every trail still grades and every ford still crosses.
-const mesaField = new MesaField({ scene, terrain, world });
+const mesaField = new MesaField({
+  scene,
+  terrain,
+  world,
+  // Rock is placed across the whole map now, so it has to go around the mill
+  // and the bridge instead of only being kept out of the canyon basin.
+  keepOut: [missionManager.millZone?.pos, missionManager.bridgeZone?.pos]
+    .filter(Boolean)
+    .map((pos) => ({ x: pos.x, z: pos.z, r: 70 })),
+});
 window.__mesa = mesaField;
 
 // Wire the cross-references so state-change notifications flow.

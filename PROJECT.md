@@ -225,8 +225,9 @@ All of this is top-level in `src/main.js`; the module uses top-level `await`.
     (`setup()`), then cross-wire `networkManager.winchSystem/missionManager`.
     Immediately after `setToaster()`: **`new PointsOfInterest({ scene, terrain, missionManager })`**
     (`window.__poi`), which dresses the mission zones in architecture, then
-    **`new MesaField({ scene, terrain, world })`** (`window.__mesa`), which adds
-    the buttes, palms and scrub.
+    **`new MesaField({ scene, terrain, world, keepOut })`** (`window.__mesa`), which
+    adds the buttes, palms and scrub across the whole map; `keepOut` carries the mill
+    and bridge positions so rock does not land on them.
 17. **CameraController**, input collections (`keys`, `held`), **UIManager**
     (`ui.setNetworkCallbacks()`), `toast()`.
 18. **AtmosphereAndPostFX** (`atmosphere.setQuality(...)`, `fogScale = 0.34`),
@@ -429,20 +430,20 @@ There are **two** layers and they are intentionally independent:
 
 | field | LOW | MEDIUM | HIGH |
 |---|---|---|---|
-| `maxPixelRatio` | 1 | 1.5 | 2.5 |
+| `maxPixelRatio` | 1 | 2 | 2.5 |
 | `antialias` | false | true | true |
-| `shadowMapSize` | 1024 | 2048 | 2048 |
+| `shadowMapSize` | 1024 | 2048 | 4096 |
 | `shadowType` | PCF | PCFSoft | PCFSoft |
-| `shadowRadius` | 1 | 2 | 3 |
+| `shadowRadius` | 1 | 3 | 4 |
 | `physicsSubSteps` | 1 | 2 | 3 |
 | `fixedTimeStep` | 1/60 | 1/60 | 1/60 |
 | `solverIterations` | 8 | 12 | 16 |
 | `enableGpuMudRuts` | false | true | true |
 | `enableCanvasTracks` | true | true | true |
-| `particleBudget` | 0 | 90 | 320 |
-| `anisotropy` | 1 | 4 | 8 |
-| `fogNear / fogFar` | 30 / 210 | 40 / 340 | 60 / 480 |
-| `skySegments` | 16 | 24 | 32 |
+| `particleBudget` | 0 | 140 | 420 |
+| `anisotropy` | 1 | 8 | 16 |
+| `fogNear / fogFar` | 30 / 210 | 50 / 400 | 70 / 540 |
+| `skySegments` | 16 | 32 | 48 |
 | `toneExposure` | 1.0 | 1.0 | 1.05 |
 
 `detectQualityTier()`: coarse pointer → LOW; discrete GPU (`rtx|gtx|radeon rx|arc
@@ -453,24 +454,25 @@ memory ≥ 8 ? MEDIUM : LOW; ≥ 8 cores and ≥ 8 GB → HIGH; else MEDIUM.
 
 | field | COZY | ULTRA_LOW | LOW | MEDIUM | HIGH |
 |---|---|---|---|---|---|
-| `pixelRatio` | 1.25 | 0.7 | 1 | 1.25 | 2 |
-| `shadows` | MED_1024 | off | LOW_512 | MED_1024 | HIGH_2048_SOFT |
+| `pixelRatio` | 1.25 | 0.7 | 1 | 1.25 | 2.5 |
+| `shadows` | MED_1024 | off | LOW_512 | MED_1024 | HIGH_4096_SOFT |
 | `postProcessing` | true | false | false | false | true |
 | `mudDeformMode` | GPU_512 | MATH_ONLY | DECALS | GPU_512 | GPU_1024 |
 | `foliageDensity` | 1 | 0 | 0.25 | 0.6 | 1 |
-| `particleBudget` | 200 | 20 | 60 | 150 | 400 |
+| `particleBudget` | 200 | 20 | 60 | 150 | 520 |
 | `terrainSegments` | 128 | 64 | 96 | 128 | 192 |
 | `drawDistance` | 260 | 110 | 170 | 240 | 350 |
 | `fpsCap` | 60 | 30 | 60 | 60 | 0 |
 | `physicsHz` | 60 | 45 | 60 | 60 | 60 |
-| `anisotropy` | 4 | 1 | 2 | 4 | 8 |
+| `anisotropy` | 4 | 1 | 2 | 4 | 16 |
 | `solverIterations` | 12 | 6 | 8 | 12 | 16 |
 
 `pixelRatio` resolves as `min(deviceRatio, preset.pixelRatio)` except ULTRA_LOW
 which stays 0.7. `deviceRatio()` clamps the reported DPR to 0.75–3.
 
 `SHADOW_MODES`: `off` (0 px), `LOW_512` (PCF), `MED_1024` (PCF),
-`HIGH_1024_SOFT` (PCFSoft), `HIGH_2048_SOFT` (PCFSoft).
+`HIGH_1024_SOFT` (PCFSoft), `HIGH_2048_SOFT` (PCFSoft), `HIGH_4096_SOFT`
+(PCFSoft, the HIGH preset — the mesa shadow edges are the main read on relief).
 `MUD_MODES`: `GPU_1024` (2048 stamp map), `GPU_512` (1024), `DECALS`, `MATH_ONLY`.
 
 ### 7.3 Player settings (`PLAYER_DEFAULTS`, stored alongside the preset)
@@ -579,6 +581,15 @@ kept moving the sun while the lights stayed golden, so night rendered as dusk.
 `OverlandStyle` therefore records `GOLDEN_MEADOW` without locking at boot, `Y`
 locks a preset, and any time-of-day change (`setTimePreset`, `setDynamicCycle`)
 calls `clearStyleOverride()`.
+
+**One country, four lights.** The region palettes in `WorldAtlas.REGIONS` are all
+sandstone now — the canyon is the reference and the meadow, ridge and coast are
+the same ground under a different sky (exposure, fog, sun tint). `applyStylePalette`
+tints every region ground into the same warm family, the terrain paint lerps 74 %
+toward it (32 % on trails), and the only cool note left is the sea. Snow is gated
+to the alpine region instead of any ground above 30 m, which had been dusting the
+meadow's hills white. If you add a region, give it a sandstone-family ground or
+the map will read as two games stitched together.
 
 **Two rendering paths, one look.** `LOW`/`MEDIUM` and any governor rung that
 sheds post-processing draw straight to the canvas: no grade, no sharpen, at a
@@ -711,20 +722,29 @@ physics: 4.9 m cells, graded corridors, a carved river and trails that must stay
 under `TRAIL_MAX_GRADE`. A 90 m butte is therefore **scenery**, not heightfield.
 `MesaField` supplies the relief the heightfield cannot afford.
 
+The rock is no longer a canyon feature: mesas, palms and scrub are placed across
+the **whole 2 km map**, and every region's ground palette is the same sandstone
+family under its own light (§8.5, `WorldAtlas.REGIONS`).
+
 | Set | How | Count (default seed) |
 | --- | --- | --- |
-| Massifs | 9 clusters of 2–4 overlapping buttes; the first 5 clusters are pinned 70–150 m off the river | ~30 buttes |
-| Hero buttes | 4 large walls 95–165 m off the river, radius 34–60, height 55–95 | 4 |
-| Lone mesas | rejection-sampled across the canyon region | ~14 |
-| Palm oases | 5 river-bank hearts, plus loose palms following both banks | ~117 palms |
-| Scrub | one `InstancedMesh` of faceted icosahedra, clumped by noise | up to 1500 |
+| Massifs | 24 clusters of 2–4 overlapping buttes across all four regions; the first 10 are pinned 70–150 m off the river | ~85 buttes |
+| Hero buttes | 7 large walls 95–165 m off the river, radius 34–60, height 55–95 | 7 |
+| Lone mesas | one jittered-grid candidate per 170 m cell, 45 % of cells filled, radius 12–30 | ~75 |
+| Palm oases | 9 river-bank hearts along the whole river except the alpine reach, plus loose palms on both banks | ~155 palms |
+| Scrub | one `InstancedMesh` of faceted icosahedra, clumped by noise | up to 2600 |
+
+Measured on the built terrain with the default seed: 130 mesas, 166 palms, 2600
+scrub, ~42k stone triangles, still four draw calls. Coverage check on the same
+placement code: the nearest butte is 91 m away at the median point of the map,
+197 m at p95, so no horizon is empty.
 
 Rules:
 
 - **Three merged meshes plus one instanced mesh.** Every butte, block and talus
   triangle goes into one `TriangleSoup`; trunk rings and frond ribbons each go
-  into their own; the scrub is instanced. Total cost is ~11.8k stone triangles
-  and four draw calls.
+  into their own; the scrub is instanced. Total cost is ~41k stone triangles
+  and four draw calls, for a country that now covers the map.
 - **Non-indexed geometry on purpose.** `computeVertexNormals()` on a non-indexed
   soup gives one normal per face — that is the hard low-poly facet. Do not merge
   or index it.
@@ -737,10 +757,15 @@ Rules:
 - **The talus apron follows the ground.** `appendMesa` takes a `groundAt(x, z)`
   callback and drops each outer skirt vertex onto the terrain; a flat skirt ring
   floats above falling ground like a plate under the rock.
-- **Placement is water- and road-aware.** `_canPlaceMesa` rejects wet cells,
-  ground below `waterLevel + 1.2`, a corridor narrower than `18 + radius × 0.55`
-  from any graded trail, and the proving ground. Palms additionally keep 5 m off
-  trails.
+- **Placement is water-, road- and building-aware, and world-wide.**
+  `_canPlaceMesa` rejects anything within 24 m of the world edge, a wet or
+  low footprint (centre **and** a ring at `0.6 × radius`, so a butte cannot
+  stand in the river with its talus), a corridor narrower than
+  `18 + radius × 0.55` from any graded trail, the proving ground, and every
+  keep-out: watchtowers (52 m), gas stations (44 m), signs (24 m), the spawn
+  (110 m) and whatever `keepOut` the caller passes — `main.js` passes the mill
+  and bridge zones at 70 m. Palms additionally keep 10 m off trails and out of
+  the alpine region.
 - **Colliders:** each butte gets one oversized static box (radius × 0.78), each
   palm a thin trunk box, all in `PHYS_GROUPS.GROUND`. Rubble blocks are scenery
   only; the scrub has none.
@@ -1214,6 +1239,7 @@ frame, so read the stats after a render or via `captureRenderStats`.
 | red-rock country | **`MesaField`**: terraced buttes/massifs, palm oases and instanced scrub baked to 4 draw calls / ~11.8k stone triangles; fog floor `1.45 / viewDistance` → `0.6 / viewDistance` (the floor, not the authored haze, was whitewashing the valley); ACES → `LinearToneMapping`; high-key sun/hemisphere; canyon ground retinted to sun-bleached sand; water pulled toward its own colour so the river stays turquoise against a pale sky |
 | car stability | **suspension solver fixes**: anti-roll bar sign corrected (it was adding roll — a truck parked across a 23° sidehill rolled onto its roof in 4 s, now holds at 24.5° indefinitely), per-corner support clamp raised from `0.45 W` total to the `1.15 W` strut ceiling (two wheels could previously carry only 90 % of the truck), ARB taken from smoothed travel instead of the raw ray, damper shaft speed low-passed at ~30 Hz, lateral stiffness 0.62 → 1.3 (sidehill creep 1.6 → 0.6 m/s), 6 rad/s angular-velocity clamp against solver artefacts. Corner body roll in a 0.85-lock slalom 29° → 17.3°, rough-ground roll 6.2° → 3.3°, top speed and rest jitter unchanged |
 | trailer stability | **yaw/jackknife fixes**: slip-angle trailer tyres replace force-per-m/s lateral grip, overrun brakes stop the 3.4 t trailer pushing through the ball, equal-and-opposite hitch yaw damping (20 000 N·m·s/rad) plus a ~70° stop, filtered trailer suspension and correctly signed anti-roll bars. Loaded 50 km/h slalom 126–180° fold → 6.2–6.3° maximum hitch angle on repeated runs; 50 km/h panic stop straight 15.3 m with 0° fold, braking while turning 16.1°; 70 km/h steer-pulse sway decays to zero; 23° sidehill holds at 24.0° truck / 25.1° trailer with all eight wheels grounded |
+| whole-map desert | **one red-rock country**: every region ground repainted into the canyon's sandstone family, terrain paint lerped 74 % to the region tint, snow confined to the alpine band, palms along the whole river; `MesaField` un-gated from the canyon (24 massifs, 7 hero buttes, 48 lone mesas, 2600 scrub → 127 mesas / 155 palms / 41k stone triangles, still 4 draw calls) with footprint-aware water rejection and keep-outs for landmarks, spawn, mill and bridge; HIGH tier raised to 4096 soft shadows, DPR 2.5, 16× anisotropy, 540 m fog, 512² ground detail |
 | low-quality path | **desert read without the grade**: fog floor `0.6 / viewDistance` → `0.6 / Math.max(viewDistance, 240)` (at 130 m the old value fogged the mesas to 85% haze by 200 m); palette albedo saturation ×1.15 via `saturate()` in `applyStylePalette` with grade saturation 1.3 → 1.2 — graded frame unchanged (canyon chroma 94.5 → 96.0), ungraded frame +13% chroma (70.2 → 79.4) at the governor's 0.4 pixel ratio |
 | phase audit | **every region × every phase checked under linear tone mapping**: presets no longer latch over the clock (night used to render as golden hour), `PHASES` retuned for a linear curve (golden high-key reference, ambient-dominant overcast with turbidity 16 / Rayleigh 0.5, moonlit night, 9° dawn), sky dome follows `phaseId` via `SKY_PHASES`, night water dimmed to a few percent in linear space, region grading made a stable weight (night `0.02`), alpine snow albedo `0xeef2f5` → `0xdfe8f0` with rock painted onto steep faces, coast/alpine ground tints warmed/cooled to match their regions |
 | low-poly/sharp | **low-poly + crisp pass**: nine-tap unsharp-mask `ShaderPass` (strength 0.9, contrast-gated) after the grade, bloom strength cut across all phases and region palettes (0.34 → 0.16 max) with a 0.32 radius, grade contrast 1.1 → 1.16, five-sided trunks/poles, six-sided pines, 20-facet boulders, all flat-shaded |

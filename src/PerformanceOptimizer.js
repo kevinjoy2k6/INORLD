@@ -29,6 +29,7 @@ export const SHADOW_MODES = {
   // can drop shadow resolution without changing a single shader define.
   HIGH_1024_SOFT: { label: 'High Soft (1024px)', size: 1024, type: THREE.PCFSoftShadowMap },
   HIGH_2048_SOFT: { label: 'High Soft (2048px)', size: 2048, type: THREE.PCFSoftShadowMap },
+  HIGH_4096_SOFT: { label: 'Ultra Soft (4096px)', size: 4096, type: THREE.PCFSoftShadowMap },
 };
 
 export const MUD_MODES = {
@@ -115,17 +116,19 @@ export const PRESETS = {
     id: 'HIGH',
     label: 'HIGH',
     hint: 'Desktop ultra',
-    pixelRatio: 2,
-    shadows: 'HIGH_2048_SOFT',
+    pixelRatio: 2.5,
+    // 4096 soft: the mesas are tall walls and their shadow edges are the main
+    // read on the relief, so this is the one setting worth its fill rate.
+    shadows: 'HIGH_4096_SOFT',
     postProcessing: true,
     mudDeformMode: 'GPU_1024',
     foliageDensity: 1,
-    particleBudget: 400,
+    particleBudget: 520,
     terrainSegments: 192,
     drawDistance: 350,
     fpsCap: 0,
     physicsHz: 60,
-    anisotropy: 8,
+    anisotropy: 16,
     solverIterations: 16,
   },
 };

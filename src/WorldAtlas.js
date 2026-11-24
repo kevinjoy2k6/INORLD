@@ -38,17 +38,20 @@ export const REGIONS = [
     // Metres: a soft rectangle in the west/centre of the valley.
     bounds: { x: [-320, 40], z: [-170, 60] },
     palette: {
-      ground: 0x7f8f52,
-      groundAlt: 0x9aa062,
+      // The whole valley is red-rock country now: the meadow is sage grassland
+      // over sandstone, not a green field. Its light stays its own (late dusk),
+      // but the albedo belongs to the same desert as the canyon.
+      ground: 0xa68a5c,
+      groundAlt: 0xc0a170,
       accent: 0xd9b45e,
-      fog: 0xc9b9c4,
-      skyTint: 0xff8a4a,
-      sunTint: 0xffd1a1,
-      ambient: 0x3d4f6b,
+      fog: 0xdcc3ab,
+      skyTint: 0xffae72,
+      sunTint: 0xffd3a6,
+      ambient: 0x5a4a5e,
       // Under linear tone mapping this value is a straight multiplier on the
       // phase exposure, so the old 1.02 lifted the whole meadow into the haze.
-      exposure: 1.0,
-      bloom: 0.16,
+      exposure: 0.97,
+      bloom: 0.15,
     },
     // Rolling and soft: squash the amplitude of the base noise.
     shape(h, x, z) {
@@ -88,16 +91,17 @@ export const REGIONS = [
     mood: 'late afternoon',
     bounds: { x: [-320, 320], z: [120, 320] },
     palette: {
-      ground: 0x6c7a58,
-      groundAlt: 0xe6ecf2,
-      accent: 0x4d6b7d,
-      fog: 0xb4c8d6,
-      skyTint: 0x59a6d6,
-      sunTint: 0xfff0cf,
-      ambient: 0x2f4a63,
+      // High red-rock: rust scree under snow, warm haze in the valleys below.
+      ground: 0xa17a5a,
+      groundAlt: 0xe8e0d2,
+      accent: 0x7d5550,
+      fog: 0xd6c2b6,
+      skyTint: 0x8fb9dc,
+      sunTint: 0xffeccd,
+      ambient: 0x51465c,
       // Snow has no shoulder to roll off under a linear curve: a small pull on
       // exposure is what keeps the ridge faceted instead of paper white.
-      exposure: 0.82,
+      exposure: 0.84,
       bloom: 0.11,
     },
     shape(h, x, z) {
@@ -111,14 +115,16 @@ export const REGIONS = [
     mood: 'high noon',
     bounds: { x: [-320, 320], z: [-320, -170] },
     palette: {
-      ground: 0xc2ab7a,
-      groundAlt: 0x8ea38c,
+      // Sun-bleached coral sand at the water's edge; the sea keeps its blue as
+      // the one cool accent left in the palette.
+      ground: 0xd6b083,
+      groundAlt: 0xb78f68,
       accent: 0x2f7f96,
-      fog: 0xbfd8e6,
-      skyTint: 0x3fa9e8,
-      sunTint: 0xfff6e0,
-      ambient: 0x3a6a86,
-      exposure: 1.02,
+      fog: 0xe6cdb6,
+      skyTint: 0x62b0e0,
+      sunTint: 0xfff2d8,
+      ambient: 0x4f5668,
+      exposure: 0.99,
       bloom: 0.1,
     },
     // Beach falls away to the sea; the water plane does the rest.
