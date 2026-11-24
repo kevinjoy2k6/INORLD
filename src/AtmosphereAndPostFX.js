@@ -380,6 +380,13 @@ export class AtmosphereAndPostFX {
           c *= mix( vec3( 1.0 ), cool, shadowWeight * 0.55 );
           c *= mix( vec3( 1.0 ), warm, highlightWeight * 0.4 );
 
+          // Vignette: a gentle corner falloff keeps the eye on the truck and
+          // takes the edge off a soft upscaled frame. 0.86 at the corners, no
+          // tint, so it never reads as a filter.
+          vec2 v = ( vUv - 0.5 ) * 1.34;
+          float vignette = 1.0 - smoothstep( 0.42, 1.02, length( v ) ) * 0.14;
+          c *= vignette;
+
           gl_FragColor = vec4( clamp( c, 0.0, 1.0 ), texel.a );
         }`,
     });

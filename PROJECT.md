@@ -606,7 +606,9 @@ while the `0.6 / max(viewDistance, 240)` floor still hides the draw cut. The sky
 dome's phases are desert values (deeper zenith, 44–46 % cloud) with a 10th-power
 sun glow at 0.42, so golden hour has a light source in frame. Ground colour
 carries two baked break-up bands: fine grit ±3 % and a broad mottle ±4 % at
-~125 m, because one 2 % grain left the sand as a single brown swatch.
+~125 m, because one 2 % grain left the sand as a single brown swatch. A baked
+vignette in the same grade pass darkens the corners to 0.86 without tinting, so
+the frame reads centred and a soft upscaled edge is less obvious.
 (2) The fog floor is `0.6 / max(viewDistance, 240)`: at the low preset's 130 m
 draw the old `0.6 / viewDistance` was 0.0046 and turned the mesas into 85% haze
 by 200 m; the cap keeps the draw cut hidden without erasing the country. Never
@@ -659,6 +661,7 @@ flattens a corridor along them and Landmarks lines them with poles/signs.
 | `CHUNKS` | 8 | ground chunks per side (64 total) |
 | `_chunkSize` | 150 m | prop/LOD chunk size |
 | trees / boulders / poles | 1900 / 900 / 260 | scatter counts |
+| pebbles | 26000 | near-field stone, no colliders, culled at `0.2 ×` view distance |
 
 Unmarked trails: `quarry-switchbacks`, `ridge-traverse`, `river-run`.
 

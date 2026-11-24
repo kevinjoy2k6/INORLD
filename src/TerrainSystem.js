@@ -385,7 +385,7 @@ export class TerrainSystem {
     this._foliageMeshes = [];
     this.group = new THREE.Group();
     this.group.name = 'Terrain';
-    this.stats = { trees: 0, boulders: 0, poles: 0, anchors: 0 };
+    this.stats = { trees: 0, boulders: 0, pebbles: 0, poles: 0, anchors: 0 };
 
     // Scratch objects so the per-frame boulder sync never allocates.
     this._bm = new THREE.Matrix4();
@@ -1699,6 +1699,7 @@ export class TerrainSystem {
     const TREES = 1900;
     const BOULDERS = 900;
     const POLES = 260;
+    const PEBBLES = 26000;
 
     // Placement collects matrices; the instanced meshes are built per spatial
     // chunk afterwards so the renderer can cull them (see _chunkify).
@@ -1833,6 +1834,48 @@ export class TerrainSystem {
     }
     this.stats.boulders = boulders;
 
+    /* ---- ground scatter: pebbles ---- */
+    // A boulder every ~68 m leaves the ground under the bumper bare, which is
+    // why the near field read as one brown swatch. Pebbles are pure scenery:
+    // no bodies, no shadows, 20 triangles each, and the group is culled to a
+    // fifth of the view distance, so only the ground you can actually see pays.
+    const pebbleGeometry = new THREE.IcosahedronGeometry(1, 0);
+    const pebbleMaterial = boulderMaterial.clone();
+    pebbleMaterial.flatShading = true;
+    const pebbleMatrices = [];
+    let pebbles = 0;
+    attempts = 0;
+    while (pebbles < PEBBLES && attempts < PEBBLES * 8) {
+      if ((attempts & 1023) === 0) await this._yield();
+      attempts += 1;
+      const x = (random() * 2 - 1) * (this.halfSize - 8);
+      const z = (random() * 2 - 1) * (this.halfSize - 8);
+      const index = this._indexAt(x, z);
+      const key = BIOME_KEYS[this.biomeGrid[index]];
+      if (key === 'water' || this.waterGrid[index] > 0) continue;
+      if (this.inProvingGround(x, z)) continue;
+      // Stone collects on the shoulders of a graded road and thins out on the
+      // open sand, so the scatter follows where the tyres actually go.
+      const road = this._trailFieldAt(x, z);
+      if (random() > (road.distance < road.width + 9 ? 0.9 : 0.32)) continue;
+
+      const h = this.heights[index];
+      const radius = 0.09 + random() * 0.26;
+      quaternion.setFromEuler(
+        new THREE.Euler(random() * 1.2, random() * Math.PI * 2, random() * 1.2),
+      );
+      position.set(x, h + radius * 0.32, z);
+      scale.set(
+        radius * (0.8 + random() * 0.5),
+        radius * (0.55 + random() * 0.5),
+        radius * (0.8 + random() * 0.5),
+      );
+      matrix.compose(position, quaternion, scale);
+      pebbleMatrices.push(matrix.clone());
+      pebbles += 1;
+    }
+    this.stats.pebbles = pebbles;
+
     // Trail markers along the loop, offset from the driving line.
     const loop = this.trailPoints[0];
     let poles = 0;
@@ -1919,6 +1962,16 @@ export class TerrainSystem {
       trackRefs: true,
     });
 
+    const pebbleChunks = this._chunkify({
+      name: 'Pebble',
+      sources: [
+        { geometry: pebbleGeometry, material: pebbleMaterial, matrices: pebbleMatrices, castShadow: false, receiveShadow: true },
+      ],
+      // Near field only: rock this small is invisible past a few tens of metres.
+      nearScale: 0.08,
+      maxScale: 0.2,
+    });
+
     this.poleChunks = this._chunkify({
       name: 'Pole',
       sources: [
@@ -1940,10 +1993,11 @@ export class TerrainSystem {
     this._densityMeshes = [
       ...this.treeChunks.chunks.flatMap((chunk) => chunk.meshes),
       ...boulderChunks.chunks.flatMap((chunk) => chunk.meshes),
+      ...pebbleChunks.chunks.flatMap((chunk) => chunk.meshes),
       ...this.poleChunks.chunks.flatMap((chunk) => chunk.meshes),
     ];
     this.treeMeshes = { chunks: this.treeChunks.chunks };
-    this.props = { treeChunks: this.treeChunks, boulderChunks, poleChunks: this.poleChunks };
+    this.props = { treeChunks: this.treeChunks, boulderChunks, pebbleChunks, poleChunks: this.poleChunks };
   }
 
   /* ---------------- Phase 7: living wilderness ---------------- */
