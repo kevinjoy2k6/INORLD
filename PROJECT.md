@@ -876,7 +876,11 @@ Defined: `hardpack` (grip 0.9, sinkage 0, viscosity 60, RR 0.018),
 
 `VehicleMeshBuilder` builds a Defender-style 110 from code with a real hierarchy:
 chassis frame, aluminium body, glasshouse, interior, sockets. The static body is
-**merged** (191 → 11 meshes) for draw-call reasons — keep it merged.
+**merged** (191 → 11 meshes) for draw-call reasons — keep it merged. Wheel parts
+are merged the same way per material (16 → 4 meshes inside each `SpinPivot`,
+~48 fewer draws per truck per pass) by `_mergeWheelParts`; the tyre is excluded
+because `setTirePressure` rewrites its shared geometry and it owns the mud-map
+material.
 
 `PAINT_COLORS` / `PAINT_ORDER` = `yellow, teal, rust, cream, slate`.
 `ACCESSORIES` / `ACCESSORY_ORDER` = `snorkel` (Snorkel), `roofRack` (Safari Roof

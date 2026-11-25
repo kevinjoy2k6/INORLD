@@ -1085,6 +1085,8 @@ export class VehicleMeshBuilder {
     caliper.position.set(-Math.sign(mount.x) * 0.04, 0.14, -0.12);
     pivot.add(caliper);
 
+    this._mergeWheelParts(spin, tire);
+
     pivot.add(spin);
     this.group.add(pivot);
 
@@ -1100,6 +1102,72 @@ export class VehicleMeshBuilder {
       baseZ: mount.z,
       normal: new THREE.Vector3(0, 0, 1),
     };
+  }
+
+  /**
+   * Bake the stationary wheel parts into one mesh per material.
+   *
+   * A wheel is built from 15 small meshes (barrel, two beadlocks, six spokes,
+   * hub, five lug nuts) that share the four shared materials and never move
+   * relative to each other — the whole `spin` group rotates as one. Four wheels
+   * therefore cost 60 draw calls per pass for no benefit. Merging them leaves
+   * the pivot hierarchy, the spin animation and the brake disc untouched.
+   *
+   * The tyre is deliberately excluded: `setTirePressure` rewrites its geometry
+   * every PSI change, and it owns a per-wheel material carrying the mud map.
+   */
+  _mergeWheelParts(spin, tire) {
+    const byMaterial = new Map();
+    const victims = [];
+
+    for (const child of spin.children) {
+      if (!child.isMesh || child === tire || child.children.length) continue;
+      const material = child.material;
+      if (!material || material.transparent) continue;
+      let entry = byMaterial.get(material.uuid);
+      if (!entry) {
+        entry = { material, geometries: [] };
+        byMaterial.set(material.uuid, entry);
+      }
+      child.updateMatrix();
+      const flat = (child.geometry.index ? child.geometry.toNonIndexed() : child.geometry.clone())
+        .applyMatrix4(child.matrix);
+      // mergeGeometries needs an identical attribute set on every input.
+      for (const name of Object.keys(flat.attributes)) {
+        if (name !== 'position' && name !== 'normal' && name !== 'uv') flat.deleteAttribute(name);
+      }
+      if (!flat.attributes.uv) {
+        flat.setAttribute(
+          'uv',
+          new THREE.BufferAttribute(new Float32Array(flat.attributes.position.count * 2), 2),
+        );
+      }
+      entry.geometries.push(flat);
+      victims.push(child);
+    }
+
+    if (victims.length < 4) return 0;
+
+    let merged = 0;
+    for (const entry of byMaterial.values()) {
+      const geometry = entry.geometries.length === 1
+        ? entry.geometries[0]
+        : mergeGeometries(entry.geometries, false);
+      if (!geometry) {
+        for (const piece of entry.geometries) piece.dispose();
+        continue;
+      }
+      const mesh = new THREE.Mesh(geometry, entry.material);
+      mesh.name = `WheelMerged_${merged}`;
+      spin.add(mesh);
+      merged += 1;
+    }
+
+    for (const child of victims) {
+      spin.remove(child);
+      child.geometry.dispose();
+    }
+    return merged;
   }
 
   /** Rebuild the tyre cross-section for a new inflation pressure. */
