@@ -249,9 +249,13 @@ All of this is top-level in `src/main.js`; the module uses top-level `await`.
     against an 8 s timeout so a virtual driver that never signals cannot hang boot.
     `bootMark('compile-sync')`, `bootMark('compiled')`, then `WARMING UP THE WORLD`.
 24. `requestAnimationFrame(frame)`. `#boot` stays up and `#lobby` stays `inert` until
-    **three frames have actually been rendered** at 1×; the third restores the
-    selected (possibly 2×) ratio, sets `window.__gameReady = true`, adds `.done`
-    to `#boot` and releases the lobby.
+    **three frames have actually been rendered** at 1× — or one frame has and
+    **2.5 s** of warm-up has elapsed, whichever comes first, so a very slow GPU is
+    not held for three multi-second frames. Release restores the selected
+    (possibly 2×) ratio, sets `window.__gameReady = true`, adds `.done` to `#boot`,
+    stops the boot-tip rotation and releases the lobby. The loader shows the
+    detected tier, viewport and DPR in `.boot-detail` and rotates four control
+    tips in `.boot-tip`.
 
 ---
 
@@ -341,7 +345,7 @@ rate is unverified.
 | field | meaning |
 |---|---|
 | `target` | `60` — one target on every panel |
-| `cap` | `min(2, max(1, devicePixelRatio))` — supersampling above native, never below |
+| `cap` | `pixelBudgetCap()` — `min(2, dpr, sqrt(4.2 MP / viewport))`, floored at 1; a 4K or retina panel cannot ask for 33 MP of fill |
 | `floor` | `1` — native 1:1 is the lowest pixel ratio ever used |
 | `current` | pixel ratio currently applied |
 | `retryAfter` | timestamp before which resolution may not grow again |
@@ -1167,6 +1171,8 @@ hooks; prefer them over editing code to observe behaviour.
 |---|---|
 | `__display` | `{ hz, measured, median }` — panel refresh probe |
 | `__targetFps` | governor target (always 60) |
+| `__perf()` | prints and returns `{ fps, governorFps, target, scale, cap, degrade, tier, preset, calls, triangles, buffer, css, dpr, mesaTiles, boot }` |
+| `__inputs` | live `{ keys, held }` — what a stuck-key report should be checked against |
 | `__fpsScale` | current dynamic pixel ratio |
 | `__fpsDegrade` | current ladder rung 0–5 |
 | `__fpsSmoothed` | smoothed frame rate |
@@ -1275,6 +1281,7 @@ frame, so read the stats after a render or via `captureRenderStats`.
 | autumn diorama pass | **reference-style palette**: region ground tints and `BIOME_COLOURS` moved from red sandstone to pale gold field / cool granite / turquoise water, `SKY_PHASES` dawn and golden replaced by bright-day blue with soft white cloud, `MesaField` strata and boulders regraded grey, scrub recoloured to gold/straw; a second tree stand (gold larch, own chunk group and collider list) splits the forest ~50/50 with green fir, trees 1900 → 9000, grass 46000 → 100000 biased to the driving corridor, roads narrowed (1.45× → 1.0×) and the spawn keep-out 110 → 60 m so the drop point is not a bare plain; grade softened to 1.06 sat / 1.04 contrast, sharpen 1.15 → 0.5, light raised to sun 2.2 / hemi 1.9 / exposure 1.45 |
 | low-quality path | **desert read without the grade**: fog floor `0.6 / viewDistance` → `0.6 / Math.max(viewDistance, 240)` (at 130 m the old value fogged the mesas to 85% haze by 200 m); palette albedo saturation ×1.15 via `saturate()` in `applyStylePalette` with grade saturation 1.3 → 1.2 — graded frame unchanged (canyon chroma 94.5 → 96.0), ungraded frame +13% chroma (70.2 → 79.4) at the governor's 0.4 pixel ratio |
 | phase audit | **every region × every phase checked under linear tone mapping**: presets no longer latch over the clock (night used to render as golden hour), `PHASES` retuned for a linear curve (golden high-key reference, ambient-dominant overcast with turbidity 16 / Rayleigh 0.5, moonlit night, 9° dawn), sky dome follows `phaseId` via `SKY_PHASES`, night water dimmed to a few percent in linear space, region grading made a stable weight (night `0.02`), alpine snow albedo `0xeef2f5` → `0xdfe8f0` with rock painted onto steep faces, coast/alpine ground tints warmed/cooled to match their regions |
+| ten improvements | **superresolution budget** (`sqrt(4.2 MP / viewport)` caps the governor, re-applied on resize), **warm-up ceiling** (release after 3 frames or 2.5 s), **loader tips + detected tier line**, **`prefers-reduced-motion`** for spinner/bar/pulse, **input release on blur or tab hide** (a held key never fires keyup on alt-tab), **low-fuel HUD pulse**, **`?preset=` session override**, **shadow-map texel snapping** (stops shadow crawl as the truck creeps), **`__perf()` snapshot**, `__inputs` debug handle |
 | high-res / 60 FPS | **native-resolution pass + gated boot**: governor target 120 → 60 with a native 1× floor and optional 1–2× supersampling; degradation now sheds post-FX/shadows/foliage/draw distance instead of shrinking the canvas; loading screen with a progress bar over an inert lobby, three rendered warm frames before release; `MesaField` rebaked into 256 m tiles (127 chunks, ~236k submitted triangles vs ~595k, 39.2k stone triangles); water 128² quads and 90/140 ms mirror cadence; station meshes merged and distance-culled; HIGH shadows 4096 → 2048 and DPR 2.5 → 2; MSAA enabled on LOW |
 | low-poly/sharp | **low-poly + crisp pass**: nine-tap unsharp-mask `ShaderPass` (strength 0.9, contrast-gated) after the grade, bloom strength cut across all phases and region palettes (0.34 → 0.16 max) with a 0.32 radius, grade contrast 1.1 → 1.16, five-sided trunks/poles, six-sided pines, 20-facet boulders, all flat-shaded |
 

@@ -1329,6 +1329,7 @@ html, body {
   transition: transform 180ms ease-out;
 }
 
+
 #boot .boot-detail {
   color: var(--muted);
   font-size: 9px;
@@ -1366,6 +1367,36 @@ html, body {
   border: 2px solid rgba(224, 176, 118, 0.2);
   border-top-color: var(--accent);
   animation: spin 900ms linear infinite;
+}
+
+/* One line of controls, rotated while the world builds. */
+#boot .boot-tip {
+  margin-top: 16px;
+  max-width: min(330px, 82vw);
+  min-height: 1.4em;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+  letter-spacing: 0.04em;
+  text-align: center;
+  opacity: 0.85;
+  transition: opacity 200ms ease;
+}
+
+/* Accessibility: motion is decoration here, never information. */
+@media (prefers-reduced-motion: reduce) {
+  #boot .spinner {
+    animation: none;
+    border-top-color: var(--accent);
+  }
+
+  #boot .boot-fill {
+    transition: none;
+  }
+
+  #boot .boot-tip {
+    transition: none;
+  }
 }
 
 @keyframes spin {

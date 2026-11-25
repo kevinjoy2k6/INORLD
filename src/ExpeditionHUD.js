@@ -829,6 +829,9 @@ export class ExpeditionHUD {
     refs.fuel.textContent = t.fuel.toFixed(1);
     refs.burn.textContent = t.fuelLpm.toFixed(1);
     refs.fuelBar.style.width = `${clamp(t.fuelPct * 100, 0, 100).toFixed(0)}%`;
+    // Below a seventh of a tank the bar goes red and pulses: the one warning
+    // whose absence costs the player a long walk.
+    refs.fuelBar.classList.toggle('is-low', t.fuelPct < 0.15);
 
     /* ---- drivetrain lamps ---- */
     const awdOn = !!t.awd;

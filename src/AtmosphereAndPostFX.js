@@ -566,13 +566,37 @@ export class AtmosphereAndPostFX {
     u.mieDirectionalG.value = lerp(a.mieDirectionalG ?? 0.86, b.mieDirectionalG ?? 0.86, smooth);
 
     // The scene's directional light follows it, riding along with the truck.
+    // The anchor snaps to whole shadow-map texels in light space: without it a
+    // truck creeping forward shifts every shadow edge by a fraction of a texel
+    // each frame, which the eye reads as crawling even though nothing is wrong.
     const bodyPos = this.vehicle.body.position;
+    const shadow = this.sun.shadow;
+    const shadowCam = shadow && shadow.camera;
+    const mapSize = shadow && shadow.mapSize ? shadow.mapSize.x : 0;
+    const texel = shadowCam && mapSize > 0 ? Math.abs(shadowCam.right - shadowCam.left) / mapSize : 0;
+    const snap = this._shadowSnap || (this._shadowSnap = {
+      anchor: new THREE.Vector3(),
+      right: new THREE.Vector3(),
+      back: new THREE.Vector3(),
+      up: new THREE.Vector3(0, 1, 0),
+    });
+    snap.anchor.copy(bodyPos);
+    if (texel > 0) {
+      snap.right.crossVectors(snap.up, this._sunDir);
+      if (snap.right.lengthSq() < 1e-6) snap.right.set(1, 0, 0);
+      snap.right.normalize();
+      snap.back.crossVectors(this._sunDir, snap.right).normalize();
+      const alongU = snap.anchor.dot(snap.right);
+      const alongV = snap.anchor.dot(snap.back);
+      snap.anchor.addScaledVector(snap.right, Math.round(alongU / texel) * texel - alongU);
+      snap.anchor.addScaledVector(snap.back, Math.round(alongV / texel) * texel - alongV);
+    }
+    this.sun.target.position.copy(snap.anchor);
     this.sun.position.set(
-      bodyPos.x + this._sunDir.x * 120,
-      bodyPos.y + Math.max(18, this._sunDir.y * 120),
-      bodyPos.z + this._sunDir.z * 120,
+      snap.anchor.x + this._sunDir.x * 120,
+      snap.anchor.y + Math.max(18, this._sunDir.y * 120),
+      snap.anchor.z + this._sunDir.z * 120,
     );
-    this.sun.target.position.set(bodyPos.x, bodyPos.y, bodyPos.z);
     this.sun.intensity = lerp(a.sunIntensity, b.sunIntensity, smooth);
     this.sun.color.copy(lerpColor(this._tmpColor, a.sunColor, b.sunColor, smooth));
 

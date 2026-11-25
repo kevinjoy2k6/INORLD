@@ -13,7 +13,7 @@ import { UIManager } from './UIManager.js';
 import { AtmosphereAndPostFX } from './AtmosphereAndPostFX.js';
 import { TactileVFX } from './TactileVFX.js';
 import { VehicleAudioController } from './audio/VehicleAudioController.js';
-import { PerformanceOptimizer, loadStoredSettings } from './PerformanceOptimizer.js';
+import { PerformanceOptimizer, loadStoredSettings, PRESET_ORDER } from './PerformanceOptimizer.js';
 import { GraphicsSettingsUI } from './GraphicsSettingsUI.js';
 import { ExpeditionHUD } from './ExpeditionHUD.js';
 import { ACCESSORIES, ACCESSORY_ORDER, PAINT_COLORS, PAINT_ORDER } from './VehicleMeshBuilder.js';
@@ -123,7 +123,29 @@ const boot = document.getElementById('boot');
 const bootSub = boot.querySelector('.sub');
 const bootTrack = boot.querySelector('.boot-track');
 const bootFill = boot.querySelector('.boot-fill');
+const bootDetail = boot.querySelector('.boot-detail');
+const bootTip = document.getElementById('boot-tip');
 window.__gameReady = false;
+
+/* The render cap is a pixel budget, not just a ratio, but it can only be
+ * applied once the governor exists. */
+let renderBudgetReady = false;
+
+/* Four short tips beat a spinner that says nothing. */
+const BOOT_TIPS = [
+  'W A S D or the arrow keys to drive · SPACE for the handbrake',
+  'F drops the winch · H fires the SOS beacon',
+  'R resets the truck if you end up on the roof',
+  'B camps at a fire to refuel · C changes the camera',
+];
+let bootTipIndex = 0;
+function cycleBootTip() {
+  if (!bootTip) return;
+  bootTip.textContent = BOOT_TIPS[bootTipIndex % BOOT_TIPS.length];
+  bootTipIndex += 1;
+}
+cycleBootTip();
+const bootTipTimer = setInterval(cycleBootTip, 2600);
 
 function setBootProgress(fraction, label) {
   const percent = Math.round(Math.max(0, Math.min(1, fraction)) * 100);
@@ -226,6 +248,13 @@ const camera = new THREE.PerspectiveCamera(58, window.innerWidth / window.innerH
 camera.position.set(0, 6, -16);
 
 const quality = new QualityManager(renderer, scene, initialTier);
+
+// Say what the game detected, so a weak GPU is never a mystery.
+if (bootDetail) {
+  bootDetail.textContent =
+    `${quality.tier} TIER · ${window.innerWidth}×${window.innerHeight} · ` +
+    `${(window.devicePixelRatio || 1).toFixed(1)}× DPR`;
+}
 scene.fog.near = quality.settings.fogNear;
 scene.fog.far = quality.settings.fogFar;
 
@@ -544,6 +573,27 @@ const held = {
   steerAxis: 0,
 };
 
+/**
+ * Drop every held input.
+ *
+ * Alt-tabbing with W down never delivers a keyup: the truck would be found
+ * halfway across the map, still at full throttle, when the player comes back.
+ */
+function releaseHeldInputs() {
+  keys.clear();
+  held.throttle = false;
+  held.brake = false;
+  held.left = false;
+  held.right = false;
+  held.throttleAxis = 0;
+  held.brakeAxis = 0;
+  held.steerAxis = 0;
+}
+window.addEventListener('blur', releaseHeldInputs);
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) releaseHeldInputs();
+});
+
 // Phase 6 UI is constructed here, after the camera controller and the shared
 // held-input object exist. Building it earlier would read `cameraController`
 // before its declaration and throw.
@@ -728,6 +778,13 @@ const optimizer = new PerformanceOptimizer({
 optimizer.registerCullable(rescueBeacon, { margin: 0 });
 optimizer.registerCullable(trailer.group, { margin: 40 });
 for (const fire of atmosphere.campfires) optimizer.registerCullable(fire.group, { margin: 40 });
+
+// ?preset=HIGH forces a preset for this session only. Handy on a borrowed
+// machine, and it never overwrites what the player saved.
+const forcedPreset = (new URLSearchParams(window.location.search).get('preset') || '').toUpperCase();
+if (forcedPreset && PRESET_ORDER.includes(forcedPreset)) {
+  optimizer.applySettings({ preset: forcedPreset }, { persist: false, markCustom: false });
+}
 
 const settingsUI = new GraphicsSettingsUI({
   optimizer,
@@ -1340,6 +1397,9 @@ function handleResize() {
   camera.updateProjectionMatrix();
   optimizer.resize();
   atmosphere.resize(width, height);
+  // A resize changes the pixel budget: a smaller window may afford a sharper
+  // buffer, a bigger one may not.
+  applyPixelBudget();
 }
 
 window.addEventListener('resize', handleResize);
@@ -1353,6 +1413,7 @@ let lastTime = performance.now();
 let accumulator = 0;
 let started = false;
 let warmFrames = 0;
+let warmStart = 0;
 const foliageTrucks = [];
 
 let steerValue = 0;
@@ -1633,6 +1694,7 @@ function frame(now) {
     atmosphere.render();
     optimizer.captureRenderStats();
     if (!started) {
+      if (!warmStart) warmStart = performance.now();
       warmFrames += 1;
       setBootProgress(0.96 + Math.min(3, warmFrames) * (0.04 / 3), 'WARMING UP THE WORLD');
     }
@@ -1645,8 +1707,13 @@ function frame(now) {
     hudTimer = 0;
   }
 
-  if (!started && warmFrames >= 3) {
+  // Three frames prove the whole pipeline runs. Two and a half seconds is the
+  // ceiling on a GPU so slow that a third warm frame would be an unreasonable
+  // wait — the loader has already bought the expensive part of the boot.
+  const warmed = warmFrames >= 3 || (warmFrames >= 1 && performance.now() - warmStart > 2500);
+  if (!started && warmed) {
     started = true;
+    clearInterval(bootTipTimer);
     setBootProgress(1, 'READY');
     bootMark('ready');
     window.__gameReady = true;
@@ -1664,13 +1731,36 @@ function frame(now) {
  *  Frame-rate governor
  * ------------------------------------------------------------------ */
 
+/* Supersampling is capped by total pixels, not only by the device ratio: a 2×
+ * buffer on a 4K panel is 33 MP of fill, which no machine needs for sharpness
+ * and every machine pays for twice. */
+const PIXEL_BUDGET = 4_200_000;
+function pixelBudgetCap() {
+  const width = Math.max(1, window.innerWidth);
+  const height = Math.max(1, window.innerHeight);
+  const dpr = window.devicePixelRatio || 1;
+  const budgetRatio = Math.sqrt(PIXEL_BUDGET / (width * height));
+  return Math.max(1, Math.min(2, Math.min(dpr, budgetRatio)));
+}
+/** Re-apply the budget after a resize; this only ever clamps downward. */
+function applyPixelBudget() {
+  if (!renderBudgetReady) return;
+  const cap = pixelBudgetCap();
+  governor.cap = cap;
+  if (governor.current > cap) {
+    governor.current = cap;
+    optimizer.scaleResolution(cap);
+    window.__fpsScale = +cap.toFixed(2);
+  }
+}
+
 const governor = {
   // Sixty is the performance target; faster panels may still render uncapped.
   // Chasing 120 used to destroy image quality on perfectly good 60 Hz GPUs.
   target: 60,
-  // Supersample up to 2x when the device and preset allow it, but never upscale
-  // a tiny buffer: 1 CSS pixel per drawing-buffer pixel is the hard floor.
-  cap: Math.min(2, Math.max(1, window.devicePixelRatio || 1)),
+  // Supersample above native only while both the device and the pixel budget
+  // allow it; 1 CSS pixel per drawing-buffer pixel is the hard floor.
+  cap: pixelBudgetCap(),
   retryAfter: 0,
   floor: 1,
   current: 1,
@@ -1691,6 +1781,7 @@ const governor = {
   shadowInterval: 0.08,
 };
 governor.current = governor.cap;
+renderBudgetReady = true;
 
 // Everything the ladder is allowed to take away, captured so it can be handed
 // back later. `baseline` is the player's own settings, `ladderBase` is what the
@@ -1852,6 +1943,32 @@ function fpsGovernor(dt) {
 
 window.__governor = governor;
 window.__setDegrade = applyLadder;
+// Input state for debugging stuck-key reports (see releaseHeldInputs).
+window.__inputs = { keys, held };
+
+/* One call that answers "is it actually hitting 60 on this machine?" */
+window.__perf = () => {
+  const stats = optimizer.renderStats || {};
+  const snapshot = {
+    fps: +fpsSmoothed.toFixed(1),
+    governorFps: +governor.smoothFps.toFixed(1),
+    target: governor.target,
+    scale: +governor.current.toFixed(2),
+    cap: +governor.cap.toFixed(2),
+    degrade: governor.degrade,
+    tier: quality.tier,
+    preset: optimizer.settings.id || optimizer.settings.preset,
+    calls: stats.calls ?? null,
+    triangles: stats.triangles ?? null,
+    buffer: [renderer.domElement.width, renderer.domElement.height],
+    css: [window.innerWidth, window.innerHeight],
+    dpr: window.devicePixelRatio || 1,
+    mesaTiles: mesaField.visibleChunks,
+    boot: bootWatch.marks.map(([label, ms]) => `${label}@${ms}ms`),
+  };
+  console.log('%c[INORLD] performance snapshot', 'color:#e0b076;font-weight:600', snapshot);
+  return snapshot;
+};
 
 window.__game = {
   scene, camera, renderer, world, vehicle, trailer, quality, cameraController,

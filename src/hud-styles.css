@@ -585,6 +585,22 @@ body.xh-settings-open #xh-hud {
   background: linear-gradient(90deg, var(--xh-rust), var(--xh-amber) 35%, var(--xh-sage));
 }
 
+/* Low fuel: flat warning red that pulses, so it reads from the corner of an eye. */
+.xh-fuel-bar.is-low > i {
+  background: var(--xh-rust);
+  animation: xh-fuel-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes xh-fuel-pulse {
+  50% { opacity: 0.4; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .xh-fuel-bar.is-low > i {
+    animation: none;
+  }
+}
+
 /* ============================ BOTTOM RIGHT — GEAR GATE ============================ */
 
 #xh-gate {
