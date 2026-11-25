@@ -112,6 +112,10 @@ export class ExpeditionHUD {
           <div class="xh-mission-row"><span>WATCHTOWERS</span><b data-xh-towers>0/3</b></div>
           <div class="xh-mission-row"><span>TIMBER</span><b data-xh-timber>0/2</b></div>
           <div class="xh-mission-row"><span data-xh-next-label>NEXT</span><b data-xh-next>—</b></div>
+          <div class="xh-bearing-row" data-xh-bearing-row hidden>
+            <span class="xh-bearing-dial"><i data-xh-bearing>▲</i></span>
+            <span class="xh-bearing-text"><b data-xh-heading>—</b><small>BEARING</small></span>
+          </div>
           <div class="xh-progress"><i data-xh-mission-bar></i></div>
           <button class="xh-btn rust wide" type="button" data-xh-sos>⛑ SOS WINCH BEACON <kbd>H</kbd></button>
         </div>
@@ -382,6 +386,9 @@ export class ExpeditionHUD {
       pedalBrake: tq('[data-xh-pedal="brake"]'),
       fillThrottle: tq('[data-xh-pedal-fill="throttle"]'),
       fillBrake: tq('[data-xh-pedal-fill="brake"]'),
+      bearingRow: q('[data-xh-bearing-row]'),
+      bearing: q('[data-xh-bearing]'),
+      heading: q('[data-xh-heading]'),
     };
   }
 
@@ -800,9 +807,29 @@ export class ExpeditionHUD {
         refs.next.textContent = objective.distance >= 1000
           ? `${(objective.distance / 1000).toFixed(1)} KM`
           : `${Math.round(objective.distance)} M`;
+        // Bearing to the objective relative to the truck's nose: the arrow
+        // points where to steer, which is faster to read than a distance.
+        if (refs.bearingRow && refs.bearing && refs.heading && objective.zone && objective.zone.pos) {
+          const body = this.vehicle.body;
+          const q = body.quaternion;
+          // Forward (0,0,1) rotated by the body quaternion, without importing three.
+          const forwardX = 2 * (q.x * q.z + q.w * q.y);
+          const forwardZ = 1 - 2 * (q.x * q.x + q.y * q.y);
+          const toX = objective.zone.pos.x - body.position.x;
+          const toZ = objective.zone.pos.z - body.position.z;
+          const headingDeg = (Math.atan2(forwardX, forwardZ) * 180) / Math.PI;
+          const bearingDeg = (Math.atan2(toX, toZ) * 180) / Math.PI;
+          const relative = ((bearingDeg - headingDeg + 540) % 360) - 180;
+          const compass = ((bearingDeg % 360) + 360) % 360;
+          const cardinals = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+          refs.bearingRow.hidden = false;
+          refs.bearing.style.transform = `rotate(${relative.toFixed(0)}deg)`;
+          refs.heading.textContent = `${Math.round(compass)}° ${cardinals[Math.round(compass / 45) % 8]}`;
+        }
       } else {
         refs.nextLabel.textContent = 'NEXT';
         refs.next.textContent = 'ALL CLEAR';
+        if (refs.bearingRow) refs.bearingRow.hidden = true;
       }
     }
 

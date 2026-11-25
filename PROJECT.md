@@ -267,8 +267,9 @@ All of this is top-level in `src/main.js`; the module uses top-level `await`.
 dt = min(0.1, (now - lastTime)/1000)
 optimizer.update(dt, now)                 // metering, culling, sleeping (see §6)
 shouldRender = optimizer.shouldRender(now) // fpsCap gate
-readDriverInput(dt)                        // keyboard + analog → vehicle
-physics accumulator (max 3 ticks)          // see below
+paused = settingsUI.isOpen                 // the settings drawer is a pause
+if (!paused) readDriverInput(dt)           // keyboard + touch + gamepad
+if (!paused) physics accumulator (max 3)   // see below
 vehicle.syncVisuals(alpha, dt); trailer.syncVisuals(alpha)
 cameraController.update(dt)                // unless photo mode is active
 rutSystem.update(dt)
@@ -985,6 +986,19 @@ target, `11 × centering` back), clamps to ±1, and honours an audio-lab overrid
 
 ---
 
+### 13.3 Gamepad
+
+`pollGamepad()` runs inside `readDriverInput` and reads only while a pad reports
+`connected`: left stick (axis 0, 14 % deadzone) steers, the right and left
+triggers are throttle and brake, button 1 is the handbrake. Pad values blend
+with the keyboard and touch channels rather than replacing them, so all three
+keep working when a controller is plugged in mid-drive. `window.__gamepad`
+exposes `{ connected, id, steer, throttle, brake, handbrake }`. A pad is not
+needed for anything, and unplugging one zeroes its contribution on the same
+frame.
+
+---
+
 ## 14. UI, HUD and DOM contract
 
 ### 14.1 Shell (`index.html`)
@@ -999,7 +1013,8 @@ cockpit `#touch-ui`, settings modal, expedition panels `#panel-gearbox`,
 `#hud-net*`, `#hud-patch`, `#hud-timber`, `#hud-watchtowers`, `#hud-tier`,
 `#btn-awd|diff|winch|hitch|refuel|help|camera|tier|touch`, plus the legacy
 readouts `#hud-speed|gear|rpm|rpm-bar|fuel|fuel-bar|fuel-rate|psi|sink|surface|
-quality|fps|physics|camera|trailer`.
+quality |fps |physics|camera|trailer`, and the objective bearing row
+`[data-xh-bearing-row]` / `[data-xh-bearing]` / `[data-xh-heading]`.
 
 ### 14.2 Who owns what
 
@@ -1173,6 +1188,8 @@ hooks; prefer them over editing code to observe behaviour.
 | `__targetFps` | governor target (always 60) |
 | `__perf()` | prints and returns `{ fps, governorFps, target, scale, cap, degrade, tier, preset, calls, triangles, buffer, css, dpr, mesaTiles, boot }` |
 | `__inputs` | live `{ keys, held }` — what a stuck-key report should be checked against |
+| `__gamepad` | parsed pad state `{ connected, id, steer, throttle, brake, handbrake }` |
+| `INORLD_CAMERA` | localStorage key: the camera mode is restored at boot |
 | `__fpsScale` | current dynamic pixel ratio |
 | `__fpsDegrade` | current ladder rung 0–5 |
 | `__fpsSmoothed` | smoothed frame rate |
@@ -1281,6 +1298,7 @@ frame, so read the stats after a render or via `captureRenderStats`.
 | autumn diorama pass | **reference-style palette**: region ground tints and `BIOME_COLOURS` moved from red sandstone to pale gold field / cool granite / turquoise water, `SKY_PHASES` dawn and golden replaced by bright-day blue with soft white cloud, `MesaField` strata and boulders regraded grey, scrub recoloured to gold/straw; a second tree stand (gold larch, own chunk group and collider list) splits the forest ~50/50 with green fir, trees 1900 → 9000, grass 46000 → 100000 biased to the driving corridor, roads narrowed (1.45× → 1.0×) and the spawn keep-out 110 → 60 m so the drop point is not a bare plain; grade softened to 1.06 sat / 1.04 contrast, sharpen 1.15 → 0.5, light raised to sun 2.2 / hemi 1.9 / exposure 1.45 |
 | low-quality path | **desert read without the grade**: fog floor `0.6 / viewDistance` → `0.6 / Math.max(viewDistance, 240)` (at 130 m the old value fogged the mesas to 85% haze by 200 m); palette albedo saturation ×1.15 via `saturate()` in `applyStylePalette` with grade saturation 1.3 → 1.2 — graded frame unchanged (canyon chroma 94.5 → 96.0), ungraded frame +13% chroma (70.2 → 79.4) at the governor's 0.4 pixel ratio |
 | phase audit | **every region × every phase checked under linear tone mapping**: presets no longer latch over the clock (night used to render as golden hour), `PHASES` retuned for a linear curve (golden high-key reference, ambient-dominant overcast with turbidity 16 / Rayleigh 0.5, moonlit night, 9° dawn), sky dome follows `phaseId` via `SKY_PHASES`, night water dimmed to a few percent in linear space, region grading made a stable weight (night `0.02`), alpine snow albedo `0xeef2f5` → `0xdfe8f0` with rock painted onto steep faces, coast/alpine ground tints warmed/cooled to match their regions |
+| playability pass | **gamepad support** (stick + triggers + handbrake, blended with keyboard/touch), **settings drawer pauses the world** (the truck used to roll while a slider was dragged), **objective bearing compass** in the expedition pill (arrow relative to the nose plus degrees/cardinal), **camera mode persists** in `INORLD_CAMERA` |
 | ten improvements | **superresolution budget** (`sqrt(4.2 MP / viewport)` caps the governor, re-applied on resize), **warm-up ceiling** (release after 3 frames or 2.5 s), **loader tips + detected tier line**, **`prefers-reduced-motion`** for spinner/bar/pulse, **input release on blur or tab hide** (a held key never fires keyup on alt-tab), **low-fuel HUD pulse**, **`?preset=` session override**, **shadow-map texel snapping** (stops shadow crawl as the truck creeps), **`__perf()` snapshot**, `__inputs` debug handle |
 | high-res / 60 FPS | **native-resolution pass + gated boot**: governor target 120 → 60 with a native 1× floor and optional 1–2× supersampling; degradation now sheds post-FX/shadows/foliage/draw distance instead of shrinking the canvas; loading screen with a progress bar over an inert lobby, three rendered warm frames before release; `MesaField` rebaked into 256 m tiles (127 chunks, ~236k submitted triangles vs ~595k, 39.2k stone triangles); water 128² quads and 90/140 ms mirror cadence; station meshes merged and distance-culled; HIGH shadows 4096 → 2048 and DPR 2.5 → 2; MSAA enabled on LOW |
 | low-poly/sharp | **low-poly + crisp pass**: nine-tap unsharp-mask `ShaderPass` (strength 0.9, contrast-gated) after the grade, bloom strength cut across all phases and region palettes (0.34 → 0.16 max) with a 0.32 radius, grade contrast 1.1 → 1.16, five-sided trunks/poles, six-sided pines, 20-facet boulders, all flat-shaded |

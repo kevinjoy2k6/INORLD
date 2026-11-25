@@ -1429,6 +1429,42 @@ function isFormControl(element) {
  * funnel into one steering value, so sensitivity and self-centering apply
  * uniformly and the wheel never snaps.
  */
+/* ---- gamepad --------------------------------------------------------
+ * Standard mapping: left stick steers, the triggers drive, B is the handbrake.
+ * A pad is only read while one is connected, so keyboard and touch behaviour
+ * is untouched on machines that do not have one.
+ * ------------------------------------------------------------------- */
+const gamepad = { connected: false, id: '', steer: 0, throttle: 0, brake: 0, handbrake: false };
+window.__gamepad = gamepad;
+
+function pollGamepad() {
+  const pads = navigator.getGamepads ? navigator.getGamepads() : null;
+  let pad = null;
+  if (pads) {
+    for (const candidate of pads) {
+      if (candidate && candidate.connected) {
+        pad = candidate;
+        break;
+      }
+    }
+  }
+  gamepad.connected = !!pad;
+  if (!pad) {
+    gamepad.steer = 0;
+    gamepad.throttle = 0;
+    gamepad.brake = 0;
+    gamepad.handbrake = false;
+    return;
+  }
+  gamepad.id = pad.id;
+  const stick = pad.axes[0] || 0;
+  const trigger = (index) => (pad.buttons[index] ? pad.buttons[index].value || 0 : 0);
+  gamepad.steer = Math.abs(stick) < 0.14 ? 0 : stick;
+  gamepad.throttle = trigger(7);
+  gamepad.brake = trigger(6);
+  gamepad.handbrake = !!(pad.buttons[1] && pad.buttons[1].pressed);
+}
+
 function readDriverInput(dt) {
   const digitalThrottle = keys.has('KeyW') || keys.has('ArrowUp') || held.throttle ? 1 : 0;
   const digitalBrake = keys.has('KeyS') || keys.has('ArrowDown') || held.brake ? 1 : 0;
@@ -1437,10 +1473,12 @@ function readDriverInput(dt) {
   if (keys.has('KeyA') || keys.has('ArrowLeft') || held.left) digitalSteer -= 1;
   if (keys.has('KeyD') || keys.has('ArrowRight') || held.right) digitalSteer += 1;
 
-  const throttle = Math.max(digitalThrottle, Number(held.throttleAxis) || 0);
-  const brake = Math.max(digitalBrake, Number(held.brakeAxis) || 0);
+  pollGamepad();
 
-  const analogSteer = Number(held.steerAxis) || 0;
+  const throttle = Math.max(digitalThrottle, Number(held.throttleAxis) || 0, gamepad.throttle);
+  const brake = Math.max(digitalBrake, Number(held.brakeAxis) || 0, gamepad.brake);
+
+  const analogSteer = Math.abs(gamepad.steer) > 0.01 ? gamepad.steer : Number(held.steerAxis) || 0;
   const target = Math.abs(analogSteer) > 0.01 ? analogSteer : digitalSteer;
 
   const sensitivity = optimizer.settings.steerSensitivity;
@@ -1469,6 +1507,10 @@ function readDriverInput(dt) {
     vehicle.setSteer(override.steer || 0);
     return;
   }
+
+  // The pad's handbrake shares the Space key's latch: released unless the pad
+  // says otherwise, and never stuck on after the controller is unplugged.
+  if (gamepad.connected) vehicle.setHandbrake(gamepad.handbrake || keys.has('Space'));
 
   vehicle.setThrottle(throttle);
   vehicle.setBrake(brake);
@@ -1533,15 +1575,19 @@ function frame(now) {
   const subSteps = optimizer.physicsSubSteps;
   const subStep = step / subSteps;
 
-  readDriverInput(dt);
+  // The settings drawer is a pause. Without this the truck keeps rolling
+  // downhill while the player is reading a slider.
+  const paused = settingsUI.isOpen;
+  if (!paused) readDriverInput(dt);
 
   // Never let a slow frame snowball. Catching up five physics ticks makes the
   // next frame slower again, and that is how a 20 FPS machine slides to 4. Three
   // ticks of catch-up keeps the truck responsive and stops the simulation from
   // eating the frame it is trying to save; anything older is simply dropped.
-  accumulator += Math.min(dt, step * 3);
+  if (paused) accumulator = 0;
+  else accumulator += Math.min(dt, step * 3);
   let ticks = 0;
-  while (accumulator >= step && ticks < 3) {
+  while (!paused && accumulator >= step && ticks < 3) {
     vehicle.beginFrame();
     trailer.beginFrame();
     for (let i = 0; i < subSteps; i += 1) {
@@ -1939,6 +1985,24 @@ function fpsGovernor(dt) {
     governor.recoverWindows = 0;
   }
 
+}
+
+/* ---- remember the camera mode --------------------------------------- */
+try {
+  const savedCamera = localStorage.getItem('INORLD_CAMERA');
+  if (savedCamera && CAMERA_MODE_LABEL[savedCamera]) cameraController.setMode(savedCamera);
+  const setModeOriginal = cameraController.setMode.bind(cameraController);
+  cameraController.setMode = (mode) => {
+    const result = setModeOriginal(mode);
+    try {
+      localStorage.setItem('INORLD_CAMERA', result);
+    } catch {
+      // Private mode: the mode simply does not persist.
+    }
+    return result;
+  };
+} catch {
+  // Storage blocked; nothing to restore.
 }
 
 window.__governor = governor;

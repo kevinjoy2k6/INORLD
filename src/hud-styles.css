@@ -585,6 +585,61 @@ body.xh-settings-open #xh-hud {
   background: linear-gradient(90deg, var(--xh-rust), var(--xh-amber) 35%, var(--xh-sage));
 }
 
+/* Objective bearing: an arrow that points where to steer. */
+.xh-bearing-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(244, 239, 230, 0.09);
+}
+
+.xh-bearing-dial {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px solid rgba(244, 239, 230, 0.16);
+  background: radial-gradient(circle at 50% 38%, rgba(224, 176, 118, 0.18), transparent 72%);
+}
+
+.xh-bearing-dial > i {
+  font-style: normal;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--xh-amber);
+  transform-origin: 50% 50%;
+  transition: transform 140ms linear;
+}
+
+.xh-bearing-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+}
+
+.xh-bearing-text b {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: rgba(244, 239, 230, 0.92);
+}
+
+.xh-bearing-text small {
+  font-size: 8px;
+  letter-spacing: 0.14em;
+  color: rgba(244, 239, 230, 0.5);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .xh-bearing-dial > i {
+    transition: none;
+  }
+}
+
 /* Low fuel: flat warning red that pulses, so it reads from the corner of an eye. */
 .xh-fuel-bar.is-low > i {
   background: var(--xh-rust);
