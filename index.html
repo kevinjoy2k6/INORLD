@@ -9,7 +9,7 @@
     />
     <meta name="theme-color" content="#0d1117" />
     <link rel="icon" href="data:," />
-    <link rel="stylesheet" href="./styles.css?v=10" />
+    <link rel="stylesheet" href="./styles.css?v=11" />
     <link rel="stylesheet" href="./src/hud-styles.css?v=2" />
     <title>Over The Hill — Co-Op Off-Road Expedition</title>
   </head>
@@ -18,7 +18,7 @@
     <div id="app"></div>
 
     <!-- ============ LOBBY OVERLAY (Phase 6) ============ -->
-    <div id="lobby" class="lobby">
+    <div id="lobby" class="lobby" inert>
       <div class="lobby-card">
         <h1 class="lobby-title">Over The Hill</h1>
         <p class="lobby-sub">Co-op off-road expedition · Phase 6: lobby, tactical HUD &amp; touch controls</p>
@@ -214,10 +214,14 @@
     </div>
 
     <!-- ============ boot / fatal ============ -->
-    <div id="boot">
+    <div id="boot" role="status" aria-live="polite" aria-label="Preparing the expedition">
       <div class="mark">Over The Hill</div>
-      <div class="spinner"></div>
-      <div class="sub">LOADING — TERRAIN, CHASSIS &amp; CONTROLS</div>
+      <div class="spinner" aria-hidden="true"></div>
+      <div class="sub">INITIALISING HIGH-RESOLUTION RENDERING</div>
+      <div class="boot-track" role="progressbar" aria-label="World loading progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <div class="boot-fill"></div>
+      </div>
+      <div class="boot-detail">TERRAIN · FORESTS · VEHICLE · SHADERS</div>
     </div>
 
     <div id="fatal">
@@ -242,6 +246,6 @@
     <!-- PeerJS is a UMD/IIFE bundle with no ESM exports; load it classic-style
          so it can assign window.Peer before the module graph runs. -->
     <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.1/dist/peerjs.min.js"></script>
-    <script type="module" src="./src/main.js"></script>
+    <script type="module" src="./src/main.js?v=13"></script>
   </body>
 </html>

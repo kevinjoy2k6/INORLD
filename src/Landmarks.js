@@ -8,6 +8,7 @@
  * ========================================================================== */
 
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { ROADS, SIGNS, GAS_STATIONS, regionAt } from './WorldAtlas.js';
 
 /* ------------------------------------------------------------------ *
@@ -215,6 +216,44 @@ export class Landmarks {
     this.stats.stations = this.stations.length;
   }
 
+  /** Bake stationary parts by material and shadow mode (20 meshes → about 8). */
+  _mergeStationMeshes(group) {
+    const buckets = new Map();
+    for (const mesh of group.children) {
+      if (!mesh.isMesh || Array.isArray(mesh.material)) continue;
+      mesh.updateMatrix();
+      const key = `${mesh.material.uuid}:${mesh.castShadow}:${mesh.receiveShadow}`;
+      let bucket = buckets.get(key);
+      if (!bucket) {
+        bucket = { material: mesh.material, cast: mesh.castShadow, receive: mesh.receiveShadow, entries: [] };
+        buckets.set(key, bucket);
+      }
+      bucket.entries.push({ mesh, geometry: mesh.geometry.clone().applyMatrix4(mesh.matrix) });
+    }
+
+    const baked = [];
+    const replaced = [];
+    for (const bucket of buckets.values()) {
+      const geometries = bucket.entries.map((entry) => entry.geometry);
+      const merged = geometries.length === 1 ? geometries[0] : mergeGeometries(geometries, false);
+      if (!merged) {
+        for (const geometry of geometries) geometry.dispose();
+        continue;
+      }
+      const mesh = new THREE.Mesh(merged, bucket.material);
+      mesh.castShadow = bucket.cast;
+      mesh.receiveShadow = bucket.receive;
+      baked.push(mesh);
+      replaced.push(...bucket.entries);
+    }
+
+    for (const { mesh } of replaced) {
+      group.remove(mesh);
+      mesh.geometry.dispose();
+    }
+    group.add(...baked);
+  }
+
   _buildStation(def) {
     const m = this._materials;
     const terrain = this.terrain;
@@ -303,6 +342,8 @@ export class Landmarks {
     bulb.position.set(0, 4.4, 0);
     group.add(bulb);
 
+    this._mergeStationMeshes(group);
+
     return {
       ...def,
       group,
@@ -366,9 +407,11 @@ export class Landmarks {
    */
   update(dt, vehicle, night = false) {
     const p = vehicle.body.position;
+    const horizon = Math.max(150, this.terrain.viewCutoff || 260);
     let near = null;
     for (const station of this.stations) {
       const distance = Math.hypot(p.x - station.centre.x, p.z - station.centre.z);
+      station.group.visible = distance < horizon;
       const inside = distance < station.radius;
       station.bulb.intensity = night ? 1.6 : inside ? 0.9 : 0.0;
       if (inside && (!near || distance < near.distance)) near = { station, distance };

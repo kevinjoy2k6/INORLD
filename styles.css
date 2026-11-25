@@ -1306,26 +1306,57 @@ html, body {
   justify-items: center;
   gap: 14px;
   background: radial-gradient(circle at 50% 40%, #1b2530, #0b0f14 70%);
-  z-index: 40;
+  /* Above the lobby: the world must be ready before Play can be used. */
+  z-index: 100;
+  visibility: visible;
   transition: opacity 420ms ease;
 }
 
+#boot .boot-track {
+  width: min(320px, 72vw);
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(224, 176, 118, 0.16);
+}
+
+#boot .boot-fill {
+  width: 100%;
+  height: 100%;
+  transform: scaleX(0);
+  transform-origin: left center;
+  background: var(--accent);
+  transition: transform 180ms ease-out;
+}
+
+#boot .boot-detail {
+  color: var(--muted);
+  font-size: 9px;
+  letter-spacing: 0.13em;
+  text-align: center;
+}
+
 #boot.done {
+  visibility: hidden;
+  transition: opacity 420ms ease, visibility 0s linear 420ms;
   opacity: 0;
   pointer-events: none;
 }
 
 #boot .mark {
-  font-size: 12px;
+  font-size: 17px;
   letter-spacing: 0.42em;
   color: var(--accent);
   text-transform: uppercase;
 }
 
 #boot .sub {
-  font-size: 10.5px;
+  max-width: min(440px, 82vw);
   color: var(--muted);
+  font-size: 10.5px;
   letter-spacing: 0.16em;
+  line-height: 1.6;
+  text-align: center;
 }
 
 #boot .spinner {
@@ -1348,7 +1379,7 @@ html, body {
   place-content: center;
   padding: 32px;
   background: #0b0f14;
-  z-index: 50;
+  z-index: 110;
 }
 
 #fatal.show {

@@ -20,7 +20,7 @@ export const QUALITY_PRESETS = {
     label: 'LOW',
     hint: 'Mobile / integrated GPU',
     maxPixelRatio: 1,
-    antialias: false,
+    antialias: true,
     shadows: true,
     shadowMapSize: 1024,
     shadowType: THREE.PCFShadowMap,
@@ -63,13 +63,12 @@ export const QUALITY_PRESETS = {
     id: 'HIGH',
     label: 'HIGH',
     hint: 'Desktop GPU',
-    maxPixelRatio: 2.5,
+    maxPixelRatio: 2,
     antialias: true,
     shadows: true,
-    // 4096, not 2048: the mesas are 30-90 m tall walls and their shadows are
-    // the main thing that sells the relief. At 2048 one texel covered ~20 cm of
-    // terrain at the shadow camera's extent, which stair-stepped every cliff.
-    shadowMapSize: 4096,
+    // 2048 is the crisp/efficient balance for the 96 m shadow camera; 4096
+    // costs four times the shadow memory and fill for little visible gain.
+    shadowMapSize: 2048,
     shadowType: THREE.PCFSoftShadowMap,
     shadowRadius: 4,
     physicsSubSteps: 3,

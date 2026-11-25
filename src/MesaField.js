@@ -14,10 +14,10 @@
  *   - palm oases hugging the river bends, trunk rings and drooping fronds;
  *   - bright low-poly scrub on the sand around them.
  *
- *  Everything is baked into three merged meshes (stone, trunks, fronds) plus a
- *  single instanced scrub mesh, so the whole country costs a handful of draw
- *  calls. Only the buttes near the road get a static collider; the rest are
- *  backdrop and you can drive to them but never through the ones you can hit.
+ *  Everything is baked into 256 m spatial tiles (stone, trunks, fronds and
+ *  instanced scrub). The deterministic geometry and colliders are unchanged,
+ *  but update() submits only tiles near the camera instead of the whole 2 km
+ *  country on every frame and again in the water reflection.
  * ========================================================================== */
 
 import * as THREE from 'three';
@@ -123,6 +123,45 @@ class TriangleSoup {
     geometry.computeVertexNormals();
     geometry.computeBoundingSphere();
     return geometry;
+  }
+}
+
+/** Spatial buckets retain every triangle but let the camera submit nearby tiles only. */
+class SpatialTriangleSoup {
+  constructor(tileSize = 256) {
+    this.tileSize = tileSize;
+    this.buckets = new Map();
+  }
+
+  tri(a, b, c, hex) {
+    const x = (a[0] + b[0] + c[0]) / 3;
+    const z = (a[2] + b[2] + c[2]) / 3;
+    const key = `${Math.floor(x / this.tileSize)},${Math.floor(z / this.tileSize)}`;
+    let soup = this.buckets.get(key);
+    if (!soup) {
+      soup = new TriangleSoup();
+      this.buckets.set(key, soup);
+    }
+    soup.tri(a, b, c, hex);
+  }
+
+  quad(a, b, c, d, hex, flip = false) {
+    if (flip) {
+      this.tri(a, c, b, hex);
+      this.tri(a, d, c, hex);
+    } else {
+      this.tri(a, b, c, hex);
+      this.tri(a, c, d, hex);
+    }
+  }
+
+  build() {
+    const out = [];
+    for (const [key, soup] of this.buckets) {
+      const geometry = soup.build();
+      if (geometry) out.push({ key, geometry });
+    }
+    return out;
   }
 }
 
@@ -328,6 +367,8 @@ export class MesaField {
     this.group.name = 'RedRockCountry';
     this.group.matrixAutoUpdate = false;
 
+    this._lodMeshes = [];
+    this.visibleChunks = 0;
     this.stoneTriangles = 0;
     this.palms = 0;
     this.scrub = 0;
@@ -343,6 +384,45 @@ export class MesaField {
     this._buildScrub();
 
     this.scene.add(this.group);
+  }
+
+  _registerLodMesh(mesh) {
+    if (mesh.isInstancedMesh) mesh.computeBoundingSphere();
+    const sphere = mesh.isInstancedMesh ? mesh.boundingSphere : mesh.geometry.boundingSphere;
+    mesh.userData.lodX = sphere.center.x;
+    mesh.userData.lodZ = sphere.center.z;
+    mesh.userData.lodRadius = sphere.radius;
+    this._lodMeshes.push(mesh);
+    this.group.add(mesh);
+  }
+
+  _addSoupMeshes(soup, material, name, receiveShadow = false) {
+    let triangles = 0;
+    for (const { key, geometry } of soup.build()) {
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.name = `${name}_${key}`;
+      mesh.castShadow = true;
+      mesh.receiveShadow = receiveShadow;
+      mesh.matrixAutoUpdate = false;
+      triangles += geometry.attributes.position.count / 3;
+      this._registerLodMesh(mesh);
+    }
+    return triangles;
+  }
+
+  /** Distance-cull whole tiles; ordinary frustum culling handles the rest. */
+  update(camera) {
+    if (!camera) return;
+    const horizon = Math.max(170, (this.terrain.viewCutoff || 320) * 1.35);
+    let visible = 0;
+    for (const mesh of this._lodMeshes) {
+      const dx = camera.position.x - mesh.userData.lodX;
+      const dz = camera.position.z - mesh.userData.lodZ;
+      const show = Math.hypot(dx, dz) - mesh.userData.lodRadius < horizon;
+      mesh.visible = show;
+      if (show) visible += 1;
+    }
+    this.visibleChunks = visible;
   }
 
   /* ---------------- placement helpers ---------------- */
@@ -402,7 +482,7 @@ export class MesaField {
 
   _buildMesas() {
     const random = this.random;
-    const soup = new TriangleSoup();
+    const soup = new SpatialTriangleSoup();
     const colliders = [];
 
     // Massifs first: overlapping buttes read as one walled country, and the
@@ -478,16 +558,7 @@ export class MesaField {
       }
     }
 
-    const geometry = soup.build();
-    if (geometry) {
-      const mesh = new THREE.Mesh(geometry, this._stoneMaterial);
-      mesh.name = 'MesaStone';
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      mesh.matrixAutoUpdate = false;
-      this.group.add(mesh);
-      this.stoneTriangles = geometry.attributes.position.count / 3;
-    }
+    this.stoneTriangles = this._addSoupMeshes(soup, this._stoneMaterial, 'MesaStone', true);
 
     // Static colliders, generously oversized so the truck meets the talus
     // before it clips a cliff face.
@@ -550,8 +621,8 @@ export class MesaField {
 
   _buildOases() {
     const random = this.random;
-    const trunkSoup = new TriangleSoup();
-    const frondSoup = new TriangleSoup();
+    const trunkSoup = new SpatialTriangleSoup();
+    const frondSoup = new SpatialTriangleSoup();
     const colliders = [];
 
     // Five oasis hearts on the canyon reach of the river, then palms scattered
@@ -612,33 +683,20 @@ export class MesaField {
       addPalm(x, z, 0.9 + random() * 0.55);
     }
 
-    const trunkGeometry = trunkSoup.build();
-    if (trunkGeometry) {
-      const trunks = new THREE.Mesh(
-        trunkGeometry,
-        new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true }),
-      );
-      trunks.name = 'PalmTrunks';
-      trunks.castShadow = true;
-      trunks.matrixAutoUpdate = false;
-      this.group.add(trunks);
-    }
-
-    const frondGeometry = frondSoup.build();
-    if (frondGeometry) {
-      const fronds = new THREE.Mesh(
-        frondGeometry,
-        new THREE.MeshLambertMaterial({
-          vertexColors: true,
-          flatShading: true,
-          side: THREE.DoubleSide,
-        }),
-      );
-      fronds.name = 'PalmFronds';
-      fronds.castShadow = true;
-      fronds.matrixAutoUpdate = false;
-      this.group.add(fronds);
-    }
+    this._addSoupMeshes(
+      trunkSoup,
+      new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true }),
+      'PalmTrunks',
+    );
+    this._addSoupMeshes(
+      frondSoup,
+      new THREE.MeshLambertMaterial({
+        vertexColors: true,
+        flatShading: true,
+        side: THREE.DoubleSide,
+      }),
+      'PalmFronds',
+    );
 
     if (this.world) {
       for (const box of colliders) {
@@ -657,21 +715,14 @@ export class MesaField {
   /* ---------------- scrub ---------------- */
 
   /**
-   * Bright faceted bushes on the sand. One InstancedMesh, two triangles' worth
-   * of shading each: an icosahedron squashed flat and coloured per instance.
+   * Bright faceted bushes, instanced per 256 m tile and coloured per instance.
    */
   _buildScrub() {
     const random = this.random;
-    // Twice the scrub, over the whole map instead of the canyon alone: on a
-    // 2 km square, a few hundred bushes were a detail you had to look for.
     const COUNT = 2600;
     const geometry = new THREE.IcosahedronGeometry(1, 0);
     const material = new THREE.MeshLambertMaterial({ flatShading: true });
-    const mesh = new THREE.InstancedMesh(geometry, material, COUNT);
-    mesh.name = 'DesertScrub';
-    mesh.castShadow = false;
-    mesh.receiveShadow = false;
-
+    const buckets = new Map();
     const matrix = new THREE.Matrix4();
     const quaternion = new THREE.Quaternion();
     const position = new THREE.Vector3();
@@ -686,11 +737,10 @@ export class MesaField {
       if (this._trailDistance(x, z) < 3.5) continue;
       let nearBuilding = false;
       for (const keep of this._keepOuts) {
-        if (keep.r < 30) continue; // signs and posts: a bush beside them is fine
+        if (keep.r < 30) continue;
         if (Math.hypot(x - keep.x, z - keep.z) < keep.r * 0.7) { nearBuilding = true; break; }
       }
       if (nearBuilding) continue;
-      // Clumped, the way scrub grows: bare sand between thickets.
       const density = Math.sin(x * 0.021) * Math.cos(z * 0.017) + Math.sin(x * 0.006 + z * 0.008);
       if (density < -0.35 && random() > 0.2) continue;
 
@@ -700,17 +750,32 @@ export class MesaField {
       position.set(x, y + size * 0.55, z);
       scale.set(size, size * (0.6 + random() * 0.45), size);
       matrix.compose(position, quaternion, scale);
-      mesh.setMatrixAt(placed, matrix);
       color.setHex(SCRUB_COLOURS[Math.floor(random() * SCRUB_COLOURS.length)]);
-      mesh.setColorAt(placed, color);
+      const key = `${Math.floor(x / 256)},${Math.floor(z / 256)}`;
+      let bucket = buckets.get(key);
+      if (!bucket) {
+        bucket = [];
+        buckets.set(key, bucket);
+      }
+      bucket.push({ matrix: matrix.clone(), color: color.clone() });
       placed += 1;
     }
 
-    mesh.count = placed;
-    mesh.instanceMatrix.needsUpdate = true;
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-    mesh.frustumCulled = false;
-    this.group.add(mesh);
+    for (const [key, instances] of buckets) {
+      const mesh = new THREE.InstancedMesh(geometry, material, instances.length);
+      mesh.name = `DesertScrub_${key}`;
+      mesh.castShadow = false;
+      mesh.receiveShadow = false;
+      mesh.matrixAutoUpdate = false;
+      mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+      for (let i = 0; i < instances.length; i += 1) {
+        mesh.setMatrixAt(i, instances[i].matrix);
+        mesh.setColorAt(i, instances[i].color);
+      }
+      mesh.instanceMatrix.needsUpdate = true;
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+      this._registerLodMesh(mesh);
+    }
     this.scrub = placed;
   }
 
@@ -720,6 +785,8 @@ export class MesaField {
       palms: this.palms,
       scrub: this.scrub,
       stoneTriangles: this.stoneTriangles,
+      chunks: this._lodMeshes.length,
+      visibleChunks: this.visibleChunks,
     };
   }
 }

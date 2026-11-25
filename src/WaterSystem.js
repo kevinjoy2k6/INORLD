@@ -5,9 +5,8 @@
  *
  *   - The normal map is generated in code, four crossing waves summed into a
  *     normal-mapped texture, so there are no image assets to load.
- *   - three/examples/jsm/objects/Water.js supplies the mirror reflection: it
- *     renders the scene from the mirrored camera every frame and distorts that
- *     reflection with the wave normals (distortionScale 0.55, wave size 1.5).
+ *   - three/examples/jsm/objects/Water.js supplies a throttled mirror reflection
+ *     distorted by wave normals (distortionScale 0.55, wave size 1.5).
  *   - A per-vertex "depth under the surface" attribute is baked from the
  *     terrain heightfield. The fragment shader uses it for three things the
  *     reference does with an underwater render pass: a shallow tint that
@@ -62,7 +61,7 @@ function makeWaterNormals(size = 256) {
  * ------------------------------------------------------------------ */
 
 export class WaterSystem {
-  constructor({ scene, terrain, atmosphere, quality, resolution = 200 }) {
+  constructor({ scene, terrain, atmosphere, quality, resolution = 128 }) {
     this.scene = scene;
     this.terrain = terrain;
     this.atmosphere = atmosphere;
@@ -71,7 +70,8 @@ export class WaterSystem {
     const size = terrain.size;
     this.level = terrain.waterLevel;
 
-    // Subdivided so the depth attribute can carry the bank profile.
+    // 128² quads / 32,768 triangles carry the shore-depth attribute without
+    // spending 80,000 triangles on a surface whose waves are shader-driven.
     const geometry = new THREE.PlaneGeometry(size, size, resolution, resolution);
     const depths = new Float32Array(geometry.attributes.position.count);
 
@@ -98,8 +98,8 @@ export class WaterSystem {
     // Cadence in milliseconds, not frames. A frame-count throttle turns a
     // steady 60 FPS into alternating heavy and light frames, which reads as
     // stutter even though the average is fine; a lake reflection does not
-    // change in 45 ms.
-    this.mirrorInterval = tier === 'ULTRA' ? 0 : tier === 'LOW' || tier === 'COZY' || tier === 'ULTRA_LOW' ? 90 : 45;
+    // change in 90 ms.
+    this.mirrorInterval = tier === 'ULTRA' ? 0 : tier === 'LOW' || tier === 'COZY' || tier === 'ULTRA_LOW' ? 140 : 90;
     this._lastMirror = 0;
     this._frame = 0;
 
@@ -246,7 +246,7 @@ export class WaterSystem {
     const low = tier === 'LOW' || tier === 'COZY' || tier === 'ULTRA_LOW';
     this.water.material.uniforms.distortionScale.value = low ? 0.4 : 0.55;
     this.mirrorSkip = low ? 3 : 2;
-    this.mirrorInterval = low ? 90 : tier === 'ULTRA' ? 0 : 45;
+    this.mirrorInterval = low ? 140 : tier === 'ULTRA' ? 0 : 90;
     this.enabled = true;
   }
 

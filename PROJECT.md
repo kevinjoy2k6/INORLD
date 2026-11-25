@@ -16,7 +16,7 @@
 3. [Repository map](#3-repository-map)
 4. [Boot sequence (exact order)](#4-boot-sequence-exact-order)
 5. [The frame loop (exact order)](#5-the-frame-loop-exact-order)
-6. [Performance architecture — the 120 Hz frame budget](#6-performance-architecture--the-120-hz-frame-budget)
+6. [Performance architecture — the native-resolution 60 FPS budget](#6-performance-architecture--the-native-resolution-60-fps-budget)
 7. [Quality system (tiers, presets, settings, persistence)](#7-quality-system-tiers-presets-settings-persistence)
 8. [Rendering and visual stack](#8-rendering-and-visual-stack)
 9. [World: atlas, terrain, props, colliders](#9-world-atlas-terrain-props-colliders)
@@ -241,10 +241,17 @@ All of this is top-level in `src/main.js`; the module uses top-level `await`.
     **ExpeditionHUD**.
 21. **Governor + quality ladder** definitions, then the **high-refresh profile**
     (only when `governor.target >= 100`).
-22. `window.__game` (second, complete assignment) + `renderer.compile(scene, camera)`.
-23. `await renderer.compileAsync(scene, camera)` (falls back to sync `compile`),
-    `bootMark('compiled')`.
-24. `requestAnimationFrame(frame)`; on the first frame `#boot` gets `.done`.
+22. **`window.__game`** (second, complete assignment), then the loader is staged at
+    `COMPILING SHADERS`: the chosen pixel ratio is captured and the renderer is held at
+    **1×**, so boot never pays retina fill four times.
+23. **Shader warm-up behind the loader**: `renderer.compile(scene, camera)` compiles
+    every program synchronously; `compileAsync` may then confirm in parallel, raced
+    against an 8 s timeout so a virtual driver that never signals cannot hang boot.
+    `bootMark('compile-sync')`, `bootMark('compiled')`, then `WARMING UP THE WORLD`.
+24. `requestAnimationFrame(frame)`. `#boot` stays up and `#lobby` stays `inert` until
+    **three frames have actually been rendered** at 1×; the third restores the
+    selected (possibly 2×) ratio, sets `window.__gameReady = true`, adds `.done`
+    to `#boot` and releases the lobby.
 
 ---
 
@@ -303,7 +310,7 @@ runs near the end so its measurement includes everything the frame did.
 
 ---
 
-## 6. Performance architecture — the 120 Hz frame budget
+## 6. Performance architecture — the native-resolution 60 FPS budget
 
 **Ownership.** `main.js`'s `governor` owns *dynamic* resolution and the quality
 ladder. `PerformanceOptimizer` owns the static preset, renderer/composer plumbing
@@ -318,47 +325,49 @@ the optimizer's own `_autoScale()` so it cannot fight the governor.
 | JS subsystem time per frame (canvas hidden) | **0.74 ms** (of 4.99 ms total, 4.25 ms of which is three.js submit in this VM) |
 | `world.step` before collider streaming | 14.5 ms |
 | `world.step` after collider streaming | 0.08 ms |
-| draw calls / triangles at HIGH, post-FX on, 2048 shadows | **371 / 300 527** |
-| draw calls / triangles at the 120 Hz profile | **183 / 159 145** |
+| draw calls / triangles at HIGH, post-FX on, 2048 shadows, native 1× | **~525 / 236 300** |
+| submitted triangles before the tiled mesa pass | **~595 000** |
+| median canvas frame time, before → after the pass | **~359 ms → ~244 ms** |
 
-The VM's `requestAnimationFrame` is pinned to 60 Hz and its virtual GPU stalls
-~500 ms per canvas readback, so **this environment cannot display or measure
-120 FPS**. All 120 Hz validation is done with `?hz=120` plus draw-call, triangle
-and JS-time accounting.
+The MesaField tiling pass removed roughly 60 % of submitted geometry from the
+same camera. The VM has no hardware GPU path: `requestAnimationFrame` is pinned
+to 60 Hz and a canvas readback stalls ~400 ms, so **this environment cannot
+display or measure 60 FPS**. The pass is validated by draw-call/triangle counts,
+the submitted-geometry reduction and JS-time accounting; real-hardware frame
+rate is unverified.
 
 ### 6.2 Governor state (`window.__governor`)
 
 | field | meaning |
 |---|---|
-| `target` | `min(120, display.hz)`; demoted to 60 if the panel proves to be 60 Hz |
-| `cap` | `min(devicePixelRatio, target >= 100 ? 1 : 1.5)` — 4× less fill at 120 Hz |
-| `floor` | `0.4` — the lowest pixel ratio ever used |
+| `target` | `60` — one target on every panel |
+| `cap` | `min(2, max(1, devicePixelRatio))` — supersampling above native, never below |
+| `floor` | `1` — native 1:1 is the lowest pixel ratio ever used |
 | `current` | pixel ratio currently applied |
 | `retryAfter` | timestamp before which resolution may not grow again |
 | `windowFps[5]`, `smoothFps` | median-of-5 windows decision input |
 | `strikes` | consecutive deficient windows while at the floor |
 | `degrade` | ladder rung 0…5 |
-| `shadowInterval` | seconds between shadow-map refreshes (0.05 at 60, 0.08 at 120) |
+| `shadowInterval` | seconds between shadow-map refreshes (0.08 s) |
 | `lastRungAt`, `goodWindows`, `recoverWindows`, `hzChecks` | hysteresis bookkeeping |
 
 ### 6.3 Decision loop (every 0.5 s, wall clock)
 
 1. `fps = frames / windowSeconds`; push into the 5-window ring; `smooth = median`.
    A single bad half-second (shader compile, tab switch) cannot move the median.
-2. **Down** if `smooth < 0.92 × target` and above the floor:
+2. **Down** if `smooth < 0.92 × target` and above the native floor:
    step `0.15` when `fps < 0.7 × target`, else `0.07`; then `retryAfter = now + 4000`.
+   The floor is 1×, so this only ever gives back supersampled pixels.
 3. **Up** if `smooth >= 0.98 × target`, `current < cap`, `now > retryAfter`, and
    4 consecutive good windows: `+0.04`. The retry delay is what stops the classic
    breathing between two ratios.
 4. Applied through `optimizer.scaleResolution(v)`, which resizes the renderer, the
    drawing buffer **and** the post-processing targets together.
-5. **Ladder** escalates only when at the floor and `smooth < 0.9 × target` for
-   3 windows, at most once per 1.5 s. It restores one rung after 6 windows
-   (3 s) at `smooth >= 0.99 × target`.
-6. **Panel correction**: if the target is high-refresh, the ladder is exhausted,
-   and `smooth` is pinned in 57–63 fps for 6 windows, the panel is 60 Hz — target
-   becomes 60, the cap returns to `min(dpr, 1.5)`, and the player's own visuals
-   are re-applied.
+5. **Ladder** escalates only when at the native floor and `smooth < 0.9 × target`
+   for 3 windows, at most once per 1.5 s. It restores one rung after 6 windows
+   (3 s) at `smooth >= 0.99 × target`. Once resolution is at 1×, image detail
+   (post-FX, shadows, foliage, draw distance) is what pays — the canvas is never
+   shrunk below native again.
 
 ### 6.4 The ladder (`DEGRADE_STEPS`, reversible, never persisted)
 
@@ -381,21 +390,18 @@ Two snapshots exist: `baseline.settings` (the player's own settings, taken befor
 the high-refresh profile) and `ladderBase` (what the active profile started from).
 Rung 0 restores `ladderBase`; the 60 Hz correction restores `baseline`.
 
-### 6.5 High-refresh profile (applied at boot when `target >= 100`)
+### 6.5 Native-resolution profile (applied at boot, every panel)
 
 ```js
-fpsCap 60 → 0            // presets set 60; that alone would pin 120 Hz panels to 60
-pixelRatio = governor.cap // 1× instead of up to 2×  → 4× less fill
-postProcessing: false     // no bloom chain, no grade, no OutputPass
-shadows: 'HIGH_1024_SOFT' // same filtering, ¼ the shadow fill
-drawDistance: 190         // prop horizon, and fog is thickened to hide the cut
-foliageDensity: 0.6
-particleBudget: 120
-governor.shadowInterval = 0.08
+governor.target = 60        // one target; no 120 Hz chase that starves the buffer
+governor.floor = 1          // native 1:1 is never surrendered
+governor.cap = min(2, dpr)  // supersample only while there is headroom
+optimizer.externalScaleControl = true
 ```
 
-None of this is persisted and it never marks the preset `CUSTOM`, so the Settings
-panel keeps reporting exactly what the player chose.
+Compilation and the three warm-up frames run at 1×; the player's own ratio is
+restored under the loader fade. Nothing here is persisted and it never marks the
+preset `CUSTOM`, so the Settings panel keeps reporting what the player chose.
 
 ### 6.6 Costs removed or throttled for stability
 
@@ -409,7 +415,8 @@ panel keeps reporting exactly what the player chose.
 | physics catch-up | max 3 ticks per frame |
 | HUD DOM writes | 12.5 Hz (0.08 s), FPS text 10 Hz |
 | rut stamping | GPU map at a fixed cadence / decals on LOW; batches sent at 10 Hz |
-| water reflection | 192 px target, refreshed every 45 ms (90 ms on LOW/COZY); grass hidden from the mirror pass |
+| water surface | 128² quads (32 768 triangles) instead of 200²; mirror refreshed every 90 ms (140 ms on LOW/COZY/ULTRA_LOW); grass hidden from the mirror pass |
+| fuel stations | stationary parts baked by material + shadow mode (20 meshes → ~8 per station) and hidden beyond `max(150, viewCutoff)` |
 | netcode | state ticks 20 Hz, interpolation delay 110 ms |
 
 ---
@@ -430,9 +437,9 @@ There are **two** layers and they are intentionally independent:
 
 | field | LOW | MEDIUM | HIGH |
 |---|---|---|---|
-| `maxPixelRatio` | 1 | 2 | 2.5 |
-| `antialias` | false | true | true |
-| `shadowMapSize` | 1024 | 2048 | 4096 |
+| `maxPixelRatio` | 1 | 2 | 2 |
+| `antialias` | true | true | true |
+| `shadowMapSize` | 1024 | 2048 | 2048 |
 | `shadowType` | PCF | PCFSoft | PCFSoft |
 | `shadowRadius` | 1 | 3 | 4 |
 | `physicsSubSteps` | 1 | 2 | 3 |
@@ -454,8 +461,8 @@ memory ≥ 8 ? MEDIUM : LOW; ≥ 8 cores and ≥ 8 GB → HIGH; else MEDIUM.
 
 | field | COZY | ULTRA_LOW | LOW | MEDIUM | HIGH |
 |---|---|---|---|---|---|
-| `pixelRatio` | 1.25 | 0.7 | 1 | 1.25 | 2.5 |
-| `shadows` | MED_1024 | off | LOW_512 | MED_1024 | HIGH_4096_SOFT |
+| `pixelRatio` | 1.25 | 1 | 1 | 1.25 | 2 |
+| `shadows` | MED_1024 | off | LOW_512 | MED_1024 | HIGH_2048_SOFT |
 | `postProcessing` | true | false | false | false | true |
 | `mudDeformMode` | GPU_512 | MATH_ONLY | DECALS | GPU_512 | GPU_1024 |
 | `foliageDensity` | 1 | 0 | 0.25 | 0.6 | 1 |
@@ -467,12 +474,13 @@ memory ≥ 8 ? MEDIUM : LOW; ≥ 8 cores and ≥ 8 GB → HIGH; else MEDIUM.
 | `anisotropy` | 4 | 1 | 2 | 4 | 16 |
 | `solverIterations` | 12 | 6 | 8 | 12 | 16 |
 
-`pixelRatio` resolves as `min(deviceRatio, preset.pixelRatio)` except ULTRA_LOW
-which stays 0.7. `deviceRatio()` clamps the reported DPR to 0.75–3.
+`pixelRatio` resolves as `min(deviceRatio, preset.pixelRatio)`; the governor never
+goes below native 1×. `deviceRatio()` clamps the reported DPR to 0.75–3.
 
 `SHADOW_MODES`: `off` (0 px), `LOW_512` (PCF), `MED_1024` (PCF),
-`HIGH_1024_SOFT` (PCFSoft), `HIGH_2048_SOFT` (PCFSoft), `HIGH_4096_SOFT`
-(PCFSoft, the HIGH preset — the mesa shadow edges are the main read on relief).
+`HIGH_1024_SOFT` (PCFSoft), `HIGH_2048_SOFT` (PCFSoft, the HIGH preset — enough
+for cliff edges at a quarter of the 4096 memory and fill), `HIGH_4096_SOFT`
+(retained for manual selection only).
 `MUD_MODES`: `GPU_1024` (2048 stamp map), `GPU_512` (1024), `DECALS`, `MATH_ONLY`.
 
 ### 7.3 Player settings (`PLAYER_DEFAULTS`, stored alongside the preset)
@@ -487,7 +495,7 @@ which stays 0.7. `deviceRatio()` clamps the reported DPR to 0.75–3.
 
 - Storage key: **`INORLD_SETTINGS`** (`localStorage`), JSON of the whole settings
   object. Written on every persisted `applySettings`; `loadStoredSettings()`
-  merges over the recommended set and **sanitises**: `pixelRatio` 0.4–2,
+  merges over the recommended set and **sanitises**: `pixelRatio` 1–2,
   `drawDistance` 100–350, `foliageDensity` 0–1, `fpsCap ∈ {0,30,60}`, numbers
   coerced, unknown keys dropped. A corrupted store cannot brick the game.
 - `applySettings(partial, { persist = true, markCustom = true })`; passing
@@ -593,7 +601,7 @@ the map will read as two games stitched together.
 
 **Two rendering paths, one look.** `LOW`/`MEDIUM` and any governor rung that
 sheds post-processing draw straight to the canvas: no grade, no sharpen, at a
-pixel ratio the governor can clamp to 0.4. Two things therefore live outside the
+pixel ratio of 1×, the lowest the governor now uses. Two things therefore live outside the
 composer. (1) Grade chroma moved partly into the baked palette: `saturate()`
 raises `BIOME_COLOURS` and every region ground tint by 1.15 in
 `applyStylePalette` (guarded, once), and the grade pass runs at 1.24 instead of
@@ -751,17 +759,20 @@ family under its own light (§8.5, `WorldAtlas.REGIONS`).
 | Palm oases | 9 river-bank hearts along the whole river except the alpine reach, plus loose palms on both banks | ~155 palms |
 | Scrub | one `InstancedMesh` of faceted icosahedra, clumped by noise | up to 2600 |
 
-Measured on the built terrain with the default seed: 130 mesas, 166 palms, 2600
-scrub, ~42k stone triangles, still four draw calls. Coverage check on the same
-placement code: the nearest butte is 91 m away at the median point of the map,
-197 m at p95, so no horizon is empty.
+Measured on the built terrain with the default seed: 119 mesas, 146 palms, 2600
+scrub, **39 176 stone triangles across 127 spatial tiles**. Coverage check on the
+same placement code: the nearest butte is 91 m away at the median point of the
+map, 197 m at p95, so no horizon is empty.
 
 Rules:
 
-- **Three merged meshes plus one instanced mesh.** Every butte, block and talus
-  triangle goes into one `TriangleSoup`; trunk rings and frond ribbons each go
-  into their own; the scrub is instanced. Total cost is ~41k stone triangles
-  and four draw calls, for a country that now covers the map.
+- **256 m spatial tiles, not one mesh.** Every butte, block and talus triangle
+  goes into a `SpatialTriangleSoup`; trunk rings and frond ribbons each get their
+  own; the scrub is instanced per tile. Geometry and colliders are deterministic
+  and unchanged, but `update(camera)` hides whole tiles beyond
+  `max(170, viewCutoff × 1.35)` — at the spawn camera only **5** of 127 tiles are
+  submitted, instead of the country's whole 39k triangles on every frame and
+  again in the water mirror.
 - **Non-indexed geometry on purpose.** `computeVertexNormals()` on a non-indexed
   soup gives one normal per face — that is the hard low-poly facet. Do not merge
   or index it.
@@ -1151,7 +1162,7 @@ hooks; prefer them over editing code to observe behaviour.
 | global | contents |
 |---|---|
 | `__display` | `{ hz, measured, median }` — panel refresh probe |
-| `__targetFps` | governor target (60 or 120) |
+| `__targetFps` | governor target (always 60) |
 | `__fpsScale` | current dynamic pixel ratio |
 | `__fpsDegrade` | current ladder rung 0–5 |
 | `__fpsSmoothed` | smoothed frame rate |
@@ -1195,7 +1206,7 @@ frame, so read the stats after a render or via `captureRenderStats`.
 4. **No material recompiles on quality changes.** Only a shadow *type*/enable
    change may set `material.needsUpdate`; `_shadowSignature` keys on that, not on
    map size.
-5. **`applySettings` sanitises.** Values are clamped (pixel ratio ≥ 0.4, draw
+5. **`applySettings` sanitises.** Values are clamped (pixel ratio ≥ 1, draw
    distance 100–350, `fpsCap` ∈ {0,30,60}); a governor scale below the clamp would
    be silently raised.
 6. **Never re-apply identical settings.** `applyLadder` diffs before applying;
@@ -1260,6 +1271,7 @@ frame, so read the stats after a render or via `captureRenderStats`.
 | autumn diorama pass | **reference-style palette**: region ground tints and `BIOME_COLOURS` moved from red sandstone to pale gold field / cool granite / turquoise water, `SKY_PHASES` dawn and golden replaced by bright-day blue with soft white cloud, `MesaField` strata and boulders regraded grey, scrub recoloured to gold/straw; a second tree stand (gold larch, own chunk group and collider list) splits the forest ~50/50 with green fir, trees 1900 → 9000, grass 46000 → 100000 biased to the driving corridor, roads narrowed (1.45× → 1.0×) and the spawn keep-out 110 → 60 m so the drop point is not a bare plain; grade softened to 1.06 sat / 1.04 contrast, sharpen 1.15 → 0.5, light raised to sun 2.2 / hemi 1.9 / exposure 1.45 |
 | low-quality path | **desert read without the grade**: fog floor `0.6 / viewDistance` → `0.6 / Math.max(viewDistance, 240)` (at 130 m the old value fogged the mesas to 85% haze by 200 m); palette albedo saturation ×1.15 via `saturate()` in `applyStylePalette` with grade saturation 1.3 → 1.2 — graded frame unchanged (canyon chroma 94.5 → 96.0), ungraded frame +13% chroma (70.2 → 79.4) at the governor's 0.4 pixel ratio |
 | phase audit | **every region × every phase checked under linear tone mapping**: presets no longer latch over the clock (night used to render as golden hour), `PHASES` retuned for a linear curve (golden high-key reference, ambient-dominant overcast with turbidity 16 / Rayleigh 0.5, moonlit night, 9° dawn), sky dome follows `phaseId` via `SKY_PHASES`, night water dimmed to a few percent in linear space, region grading made a stable weight (night `0.02`), alpine snow albedo `0xeef2f5` → `0xdfe8f0` with rock painted onto steep faces, coast/alpine ground tints warmed/cooled to match their regions |
+| high-res / 60 FPS | **native-resolution pass + gated boot**: governor target 120 → 60 with a native 1× floor and optional 1–2× supersampling; degradation now sheds post-FX/shadows/foliage/draw distance instead of shrinking the canvas; loading screen with a progress bar over an inert lobby, three rendered warm frames before release; `MesaField` rebaked into 256 m tiles (127 chunks, ~236k submitted triangles vs ~595k, 39.2k stone triangles); water 128² quads and 90/140 ms mirror cadence; station meshes merged and distance-culled; HIGH shadows 4096 → 2048 and DPR 2.5 → 2; MSAA enabled on LOW |
 | low-poly/sharp | **low-poly + crisp pass**: nine-tap unsharp-mask `ShaderPass` (strength 0.9, contrast-gated) after the grade, bloom strength cut across all phases and region palettes (0.34 → 0.16 max) with a 0.32 radius, grade contrast 1.1 → 1.16, five-sided trunks/poles, six-sided pines, 20-facet boulders, all flat-shaded |
 
 Earlier work still in force: 150 m chunked props with distance LOD and far proxies,
@@ -1290,17 +1302,16 @@ for f in src/*.js src/audio/*.js; do node --check "$f" || echo "FAIL $f"; done
 
 **Performance**
 
-1. `__display.hz` should match the panel. `__targetFps` must equal
-   `min(120, hz)`.
-2. Watch `__fpsScale` and `__fpsDegrade` while driving: the ratio may fall, but the
-   ladder should only move when the frame rate is genuinely short and should hand
-   rungs back after sustained headroom.
-3. `__game.renderer.info.render.calls` after a drawn frame: expect ≈ 180–250 at
-   the 120 profile, not 350–500.
+1. `__targetFps` must be `60`; `__fpsScale` must never fall below `1`.
+2. Watch `__fpsScale` and `__fpsDegrade` while driving: the ratio may fall toward
+   1×, then the ladder should only move when the frame rate is genuinely short and
+   should hand rungs back after sustained headroom.
+3. `__game.renderer.info.render.calls` after a drawn frame: expect ≈ 500–540 calls
+   / ~236k triangles (the mesa tiles are culled), not ~595k.
 4. `__game.terrain.colliderStats.live` should stay small (≈ 5–15) and follow the
    truck as you drive; `total` should match the scattered props.
 5. `__boot.longTasks` should show no multi-hundred-ms tasks during play.
 6. **Cloud VM caveat:** this environment's rAF is pinned to 60 Hz and its virtual
-   GPU stalls ~500 ms per canvas readback, so a 120 FPS readout is impossible
-   there by construction. Validate with `?hz=120`, draw-call/triangle counts and
-   JS timings, and state honestly that the frame rate itself was not observed.
+   GPU stalls ~400 ms per canvas readback, so a 60 FPS readout is impossible there
+   by construction. Validate with draw-call/triangle counts and JS timings, and
+   state honestly that the frame rate itself was not observed.

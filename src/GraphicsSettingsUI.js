@@ -10,7 +10,7 @@
  * quick preset pill and the lobby button it injects itself.
  * ========================================================================== */
 
-import { PRESETS, PRESET_ORDER, SHADOW_MODES, MUD_MODES, deviceRatio } from './PerformanceOptimizer.js';
+import { PRESETS, PRESET_ORDER, SHADOW_MODES, MUD_MODES } from './PerformanceOptimizer.js';
 
 const TABS = [
   { id: 'graphics', label: 'Graphics & Performance', short: 'Graphics' },
@@ -117,11 +117,11 @@ export class GraphicsSettingsUI {
           <div class="xh-section-title">Resolution & frame rate</div>
           <div class="xh-row">
             <div class="xh-row-label"><span>Resolution scale</span><span class="xh-row-hint" data-xh-res-hint>—</span></div>
-            <input class="xh-slider" type="range" min="50" max="150" step="5" value="100" data-xh-res />
+            <input class="xh-slider" type="range" min="100" max="200" step="5" value="100" data-xh-res />
             <span class="xh-slider-val" data-xh-res-val>100%</span>
           </div>
           <div class="xh-row">
-            <div class="xh-row-label"><span>Dynamic FPS auto-scaler</span><span class="xh-row-hint">Lowers resolution when the average drops below 42 FPS</span></div>
+            <div class="xh-row-label"><span>Dynamic FPS auto-scaler</span><span class="xh-row-hint">Adapts supersampling only; never renders below native 100%</span></div>
             <button class="xh-btn on" type="button" data-xh-toggle="autoScaleResolution">ON</button>
           </div>
           <div class="xh-row">
@@ -330,7 +330,7 @@ export class GraphicsSettingsUI {
     const resSlider = q('[data-xh-res]');
     resSlider.addEventListener('input', () => {
       const pct = Number(resSlider.value) / 100;
-      this.optimizer.applySettings({ pixelRatio: +(deviceRatio() * pct).toFixed(2) });
+      this.optimizer.applySettings({ pixelRatio: +pct.toFixed(2) });
       this.sync();
     });
 
@@ -487,8 +487,8 @@ export class GraphicsSettingsUI {
       : 'Custom — every slider is yours; the preset bar will jump to Custom.';
 
     /* resolution */
-    const pct = Math.round((s.pixelRatio / deviceRatio()) * 100);
-    q('[data-xh-res]').value = String(Math.min(150, Math.max(50, pct)));
+    const pct = Math.round(s.pixelRatio * 100);
+    q('[data-xh-res]').value = String(Math.min(200, Math.max(100, pct)));
     q('[data-xh-res-val]').textContent = `${pct}%`;
     const w = Math.round(window.innerWidth * s.pixelRatio);
     const h = Math.round(window.innerHeight * s.pixelRatio);

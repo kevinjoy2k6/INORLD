@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
-import { QualityManager, QUALITY_PRESETS, detectQualityTier } from './QualityManager.js';
+import { QualityManager, detectQualityTier } from './QualityManager.js';
 import { OffroadVehicle, PHYS_GROUPS } from './OffroadVehicle.js';
 import { TrailerRig } from './TrailerRig.js';
 import { CameraController, CAMERA_MODE_LABEL, FOCUS_LABEL } from './CameraController.js';
@@ -120,6 +120,18 @@ try {
 
 const app = document.getElementById('app');
 const boot = document.getElementById('boot');
+const bootSub = boot.querySelector('.sub');
+const bootTrack = boot.querySelector('.boot-track');
+const bootFill = boot.querySelector('.boot-fill');
+window.__gameReady = false;
+
+function setBootProgress(fraction, label) {
+  const percent = Math.round(Math.max(0, Math.min(1, fraction)) * 100);
+  if (bootSub) bootSub.textContent = `LOADING ${percent}% — ${label}`;
+  if (bootFill) bootFill.style.transform = `scaleX(${percent / 100})`;
+  if (bootTrack) bootTrack.setAttribute('aria-valuenow', String(percent));
+}
+setBootProgress(0.02, 'INITIALISING HIGH-RESOLUTION RENDERING');
 
 // The surveyed proving ground is opt-in: ?test in the URL, #test in the hash
 // (some static hosts rewrite the query), or INORLD_TEST=1 in localStorage for
@@ -143,6 +155,7 @@ function showFatal(message, detail) {
   document.getElementById('fatal-detail').textContent = detail || '';
   overlay.classList.add('show');
   boot.classList.add('done');
+  boot.setAttribute('aria-hidden', 'true');
 }
 
 window.addEventListener('error', (event) => {
@@ -165,7 +178,9 @@ const initialTier = detectQualityTier();
 let renderer;
 try {
   renderer = new THREE.WebGLRenderer({
-    antialias: QUALITY_PRESETS[initialTier].antialias,
+    // Native resolution is the floor on every tier; keep MSAA on the direct
+    // rendering path too instead of making LOW synonymous with jagged edges.
+    antialias: true,
     powerPreference: 'high-performance',
     stencil: false,
   });
@@ -325,11 +340,11 @@ const terrain = new TerrainSystem({
 // screen keeps animating and the tab never locks up; the await here only
 // delays the systems below, which all need a finished world.
 await terrain.build((fraction, label) => {
-  const sub = document.querySelector('#boot .sub');
-  if (sub) sub.textContent = `LOADING ${Math.round(fraction * 100)}% — ${label}`;
+  setBootProgress(0.05 + fraction * 0.55, label);
 });
 bootWatch.buildMs = Math.round(performance.now() - bootWatch.start);
 bootMark('terrain');
+setBootProgress(0.62, 'ASSEMBLING VEHICLE & EXPEDITION');
 
 // Surveyed test range: flat pad, washboard, whoops, articulation ramps, side
 // slope, hill climb, mud pit, sand and an obstacle lane.
@@ -496,6 +511,7 @@ const mesaField = new MesaField({
     .map((pos) => ({ x: pos.x, z: pos.z, r: 70 })),
 });
 window.__mesa = mesaField;
+setBootProgress(0.74, 'FINISHING FORESTS & LANDMARKS');
 
 // Wire the cross-references so state-change notifications flow.
 networkManager.winchSystem = winchSystem;
@@ -542,6 +558,7 @@ const ui = new UIManager({
   held,
 });
 ui.setNetworkCallbacks();
+setBootProgress(0.78, 'PREPARING CONTROLS');
 
 const toastElement = document.getElementById('toast');
 let toastTimer = 0;
@@ -616,6 +633,8 @@ const audio = new VehicleAudioController({
   atmosphere,
   winchSystem,
 });
+
+setBootProgress(0.84, 'CONFIGURING THE RENDER PIPELINE');
 
 // Exposed for the audio lab, the perf probes and console tuning.
 window.__game = { audio, vehicle, cameraController, terrain, atmosphere, renderer, scene, camera, quality, world };
@@ -730,6 +749,8 @@ const expeditionHUD = new ExpeditionHUD({
   toast,
   settingsUI,
 });
+
+setBootProgress(0.9, 'PREPARING HIGH-RESOLUTION TARGETS');
 
 // Keep the HUD in step with the photo-mode class the atmosphere sets.
 const lobbyElement = document.getElementById('lobby');
@@ -1331,6 +1352,7 @@ handleResize();
 let lastTime = performance.now();
 let accumulator = 0;
 let started = false;
+let warmFrames = 0;
 const foliageTrucks = [];
 
 let steerValue = 0;
@@ -1564,6 +1586,7 @@ function frame(now) {
   // Distance LOD for props and ground cover: chunks past the fog are not drawn,
   // and chunks past the near threshold fall back to a proxy.
   terrain.updateLOD(camera);
+  mesaField.update(camera);
   // Physics streams with the truck as well: only scenery colliders within reach
   // are in the world, which takes the per-step broadphase cost from ~13 ms to
   // under 2 ms.
@@ -1609,6 +1632,10 @@ function frame(now) {
   if (shouldRender) {
     atmosphere.render();
     optimizer.captureRenderStats();
+    if (!started) {
+      warmFrames += 1;
+      setBootProgress(0.96 + Math.min(3, warmFrames) * (0.04 / 3), 'WARMING UP THE WORLD');
+    }
   }
 
   hudTimer += dt;
@@ -1618,9 +1645,17 @@ function frame(now) {
     hudTimer = 0;
   }
 
-  if (!started) {
+  if (!started && warmFrames >= 3) {
     started = true;
+    setBootProgress(1, 'READY');
+    bootMark('ready');
+    window.__gameReady = true;
+    optimizer.scaleResolution(selectedPixelRatio);
+    governor.current = selectedPixelRatio;
+    window.__fpsScale = +selectedPixelRatio.toFixed(2);
+    if (lobbyElement) lobbyElement.inert = false;
     boot.classList.add('done');
+    boot.setAttribute('aria-hidden', 'true');
   }
 }
 
@@ -1630,16 +1665,14 @@ function frame(now) {
  * ------------------------------------------------------------------ */
 
 const governor = {
-  // A panel cannot show more frames than it refreshes at, and 120 is the
-  // ceiling: above that the extra frames are invisible next to the hitches.
-  target: Math.min(120, display.hz),
-  // Pixels are the cheapest thing to lose and the hardest to notice at speed.
-  // At 120 Hz a 2x display asks for four times the fill of 1x for no visible
-  // gain, so the ceiling is native-ish resolution as soon as the target is
-  // high refresh, and 1.5x otherwise.
-  cap: Math.min(window.devicePixelRatio || 1, display.hz >= 100 ? 1 : 1.5),
+  // Sixty is the performance target; faster panels may still render uncapped.
+  // Chasing 120 used to destroy image quality on perfectly good 60 Hz GPUs.
+  target: 60,
+  // Supersample up to 2x when the device and preset allow it, but never upscale
+  // a tiny buffer: 1 CSS pixel per drawing-buffer pixel is the hard floor.
+  cap: Math.min(2, Math.max(1, window.devicePixelRatio || 1)),
   retryAfter: 0,
-  floor: 0.4,
+  floor: 1,
   current: 1,
   strikes: 0,
   degrade: 0,
@@ -1655,7 +1688,7 @@ const governor = {
   // The sun's shadow map is a second submission of every caster. Eight frames
   // a second of lag on a shadow is invisible; a 2048 shadow pass landing in an
   // 8.3 ms budget is not.
-  shadowInterval: display.hz >= 100 ? 0.08 : 0.05,
+  shadowInterval: 0.08,
 };
 governor.current = governor.cap;
 
@@ -1688,7 +1721,7 @@ function applyLadder(level) {
     foliageDensity: base.foliageDensity,
     particleBudget: base.particleBudget,
   };
-  let shadowInterval = governor.target >= 100 ? 0.08 : 0.05;
+  let shadowInterval = 0.08;
   for (let i = 1; i <= clamped; i += 1) {
     const step = DEGRADE_STEPS[i];
     if (step.postProcessing !== undefined) patch.postProcessing = step.postProcessing;
@@ -1758,8 +1791,8 @@ function fpsGovernor(dt) {
   let next = governor.current;
 
   if (smooth < target * 0.92 && governor.current > governor.floor) {
-    // One missed deadline at 120 Hz costs a whole extra 8.3 ms slot, so this
-    // moves in bigger steps than a 60 Hz governor would, and immediately.
+    // A missed 60 FPS deadline on a small machine compounds, so this moves in
+    // steps and immediately, rather than easing down over several windows.
     const step = fps < target * 0.7 ? 0.15 : 0.07;
     next = Math.max(governor.floor, governor.current - step);
     // Do not climb straight back into the ratio that just failed: give the 
@@ -1787,8 +1820,8 @@ function fpsGovernor(dt) {
     window.__fpsScale = +next.toFixed(2);
   }
 
-  // Pixels first: they are the recoverable, least visible thing to lose. Only
-  // once the floor is reached does the world itself start going away.
+  // Only supersampled pixels are expendable. Native resolution is preserved;
+  // once it is reached, post-FX, shadows, foliage and draw distance go first.
   const atFloor = governor.current <= governor.floor + 0.001;
   if (smooth < target * 0.9 && atFloor) governor.strikes += 1;
   else governor.strikes = Math.max(0, governor.strikes - 1);
@@ -1815,29 +1848,6 @@ function fpsGovernor(dt) {
     governor.recoverWindows = 0;
   }
 
-  // A high-refresh target that lands on 60.0 every single window is not a slow
-  // GPU, it is a 60 Hz panel (or a tab whose animation frames are pinned to 60),
-  // and no amount of stripping will change that. Target what the device can
-  // actually show and give the visuals back rather than leaving the game
-  // permanently degraded for a frame rate the screen cannot display.
-  const panelCeiling = smooth >= 57 && smooth <= 63;
-  const exhausted = governor.degrade >= DEGRADE_STEPS.length - 1;
-  if (governor.target > 60 && panelCeiling && exhausted) {
-    governor.hzChecks += 1;
-    if (governor.hzChecks >= 6) {
-      governor.hzChecks = 0;
-      governor.target = 60;
-      governor.cap = Math.min(window.devicePixelRatio || 1, 1.5);
-      governor.windowFps.length = 0;
-      governor.strikes = 0;
-      governor.recoverWindows = 0;
-      if (baseline.settings) ladderBase = { ...baseline.settings };
-      applyLadder(0);
-      window.__targetFps = 60;
-    }
-  } else if (governor.target > 60) {
-    governor.hzChecks = 0;
-  }
 }
 
 window.__governor = governor;
@@ -1852,45 +1862,28 @@ window.__game = {
   landmarks, pointsOfInterest, styleDNA, regionAt, waterSystem, styleOverhaul, overlandStyle,
 };
 
-/* ---- high-refresh frame profile ------------------------------------
- * 120 Hz halves the frame budget to 8.3 ms, so the pixels and passes a HIGH
- * preset spends it on have to go first. This runs after the optimizer's own
- * preset, because a stored ULTRA setting must not quietly reintroduce the cost,
- * and it is never persisted: the player's preset stays exactly what Settings
- * reports. At 60 Hz nothing here fires and the game looks as it did.
+/* ---- native-resolution 60 FPS profile -------------------------------
+ * The governor alone owns dynamic resolution. Its range is 1–2x: only pixels
+ * above native can be surrendered, and the reversible ladder handles the rest.
  * ------------------------------------------------------------------- */
 baseline.settings = { ...optimizer.settings };
-// The governor owns the resolution; the optimizer's own auto-scaler would write
-// a different value into the renderer every half second and fight it.
 optimizer.externalScaleControl = true;
-
-if (governor.target >= 100) {
-  // A 60 cap would pin a 120 Hz panel to half rate whatever the GPU does, and
-  // every weaker preset sets one.
-  if (optimizer.settings.fpsCap === 60) optimizer.settings.fpsCap = 0;
-  optimizer.applySettings(
-    {
-      pixelRatio: governor.cap,
-      postProcessing: false,
-      shadows: 'HIGH_1024_SOFT',
-      drawDistance: 190,
-      foliageDensity: 0.6,
-      particleBudget: 120,
-    },
-    { persist: false, markCustom: false },
-  );
-  governor.shadowInterval = 0.08;
-  ladderBase = { ...optimizer.settings };
-}
+ladderBase = { ...optimizer.settings };
 
 governor.current = Math.min(governor.cap, optimizer.effectivePixelRatio || governor.cap);
 window.__fpsScale = +governor.current.toFixed(2);
 window.__targetFps = governor.target;
 
-// Phase 7 adds a lot of new shader programs (wind-blown foliage, beams, post
-// passes). Link them up front so the first frames never draw a half-linked
-// program while the driver is still compiling in parallel.
-renderer.compile(scene, camera);
+// Paint the loading stage before compilation begins. compileAsync yields where
+// the driver supports parallel shader compilation; the sync fallback remains
+// necessary on older WebGL implementations.
+setBootProgress(0.94, 'COMPILING SHADERS');
+const selectedPixelRatio = Math.max(1, optimizer.effectivePixelRatio || governor.current);
+// Compile and warm into a native-size target. Supersampling is restored under
+// cover of the loader's fade, so startup does not pay retina fill four times.
+optimizer.scaleResolution(1);
+governor.current = 1;
+await new Promise((resolve) => setTimeout(resolve, 32));
 
 /* ---- pre-compile shaders -------------------------------------------------
  * Every material in the scene compiles on the first draw. That is one huge
@@ -1899,14 +1892,22 @@ renderer.compile(scene, camera);
  * yields between programs, so the boot screen keeps animating.
  * ------------------------------------------------------------------------ */
 try {
+  // Some virtual drivers never signal the parallel-compile extension's
+  // completion bit. Warm every program synchronously behind the painted loader,
+  // then bound the optional async confirmation so boot can never hang here.
+  renderer.compile(scene, camera);
+  bootMark('compile-sync');
   if (typeof renderer.compileAsync === 'function') {
-    await renderer.compileAsync(scene, camera);
-  } else {
-    renderer.compile(scene, camera);
+    bootMark('compile-async-start');
+    await Promise.race([
+      renderer.compileAsync(scene, camera),
+      new Promise((resolve) => setTimeout(resolve, 8000)),
+    ]);
   }
 } catch (error) {
   console.warn('Shader pre-compile failed; the first frame will compile instead.', error);
 }
 bootMark('compiled');
+setBootProgress(0.96, 'WARMING UP THE WORLD');
 
 requestAnimationFrame(frame);

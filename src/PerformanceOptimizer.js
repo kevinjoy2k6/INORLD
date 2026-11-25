@@ -64,8 +64,8 @@ export const PRESETS = {
   ULTRA_LOW: {
     id: 'ULTRA_LOW',
     label: 'ULTRA LOW',
-    hint: 'Potato / mobile battery saver',
-    pixelRatio: 0.7,
+    hint: 'Native resolution / minimum detail',
+    pixelRatio: 1,
     shadows: 'off',
     postProcessing: false,
     mudDeformMode: 'MATH_ONLY',
@@ -73,7 +73,7 @@ export const PRESETS = {
     particleBudget: 20,
     terrainSegments: 64,
     drawDistance: 110,
-    fpsCap: 30,
+    fpsCap: 60,
     physicsHz: 45,
     anisotropy: 1,
     solverIterations: 6,
@@ -116,10 +116,9 @@ export const PRESETS = {
     id: 'HIGH',
     label: 'HIGH',
     hint: 'Desktop ultra',
-    pixelRatio: 2.5,
-    // 4096 soft: the mesas are tall walls and their shadow edges are the main
-    // read on the relief, so this is the one setting worth its fill rate.
-    shadows: 'HIGH_4096_SOFT',
+    pixelRatio: 2,
+    // 2048 soft keeps cliff edges clean without the 4x memory and fill of 4096.
+    shadows: 'HIGH_2048_SOFT',
     postProcessing: true,
     mudDeformMode: 'GPU_1024',
     foliageDensity: 1,
@@ -172,7 +171,7 @@ const PRESET_FIELDS = [
 /** Device pixel ratio, guarded against exotic values. */
 function deviceRatio() {
   const dpr = window.devicePixelRatio || 1;
-  return Math.min(3, Math.max(0.75, dpr));
+  return Math.min(3, Math.max(1, dpr));
 }
 
 /* ====================================================================== *
@@ -246,9 +245,8 @@ export function presetSettings(id) {
   const preset = PRESETS[id] || PRESETS.MEDIUM;
   const out = { ...PLAYER_DEFAULTS, preset: preset.id };
   for (const field of PRESET_FIELDS) out[field] = preset[field];
-  // ULTRA_LOW deliberately renders below native resolution (0.70x); the rest
-  // are capped at the device ratio, exactly as the preset table describes.
-  out.pixelRatio = preset.id === 'ULTRA_LOW' ? 0.7 : Math.min(deviceRatio(), preset.pixelRatio);
+  // Every preset preserves native CSS resolution; capable displays may supersample.
+  out.pixelRatio = Math.max(1, Math.min(deviceRatio(), preset.pixelRatio));
   return out;
 }
 
@@ -279,7 +277,7 @@ function sanitise(raw) {
     }
   }
   // Numeric guards so a corrupted store cannot brick the game.
-  out.pixelRatio = Math.min(2, Math.max(0.4, out.pixelRatio));
+  out.pixelRatio = Math.min(2, Math.max(1, out.pixelRatio));
   out.drawDistance = Math.min(350, Math.max(100, out.drawDistance));
   out.foliageDensity = Math.min(1, Math.max(0, out.foliageDensity));
   out.particleBudget = Math.min(400, Math.max(0, out.particleBudget));
@@ -468,7 +466,7 @@ export class PerformanceOptimizer {
   _applyPixelRatio(ratio) {
     const renderer = this.renderer;
     if (!renderer) return;
-    const value = Math.min(2.5, Math.max(0.4, ratio));
+    const value = Math.min(2, Math.max(1, ratio));
     const width = Math.round(window.innerWidth * value);
     const height = Math.round(window.innerHeight * value);
     // Every ratio change reallocates the drawing buffer and the composer's
@@ -498,7 +496,7 @@ export class PerformanceOptimizer {
    * player's preset, and returns the value actually used.
    */
   scaleResolution(ratio) {
-    const value = this._applyPixelRatio(ratio) ?? Math.min(2.5, Math.max(0.4, ratio));
+    const value = this._applyPixelRatio(ratio) ?? Math.min(2, Math.max(1, ratio));
     this.settings.pixelRatio = value;
     this.effectivePixelRatio = value;
     return value;
@@ -698,8 +696,8 @@ export class PerformanceOptimizer {
     if (!this.settings.autoScaleResolution) return;
     if (this._frameCount < 45) return;
     if (this.fps >= 42) return;
-    if (this.settings.pixelRatio <= 0.56) return;
-    const next = Math.max(0.55, Math.round((this.settings.pixelRatio - 0.15) * 100) / 100);
+    if (this.settings.pixelRatio <= 1) return;
+    const next = Math.max(1, Math.round((this.settings.pixelRatio - 0.15) * 100) / 100);
     this.settings.pixelRatio = next;
     this._applyPixelRatio(next);
     this.save();
