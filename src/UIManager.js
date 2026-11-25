@@ -74,7 +74,9 @@ export class UIManager {
       btn.title = color.label;
       const swatch = document.createElement('span');
       swatch.className = 'paint-swatch';
-      swatch.style.background = `#${color.hex}`;
+      // `hex` is a number: template it straight into CSS and it becomes a
+      // decimal string, which parses as #RRGGBBAA with a ~2 % alpha.
+      swatch.style.background = `#${color.hex.toString(16).padStart(6, '0')}`;
       const label = document.createElement('span');
       label.className = 'paint-label';
       label.textContent = key === 'sand' ? 'TAN' : key === 'olive' ? 'OLIVE' : key === 'orange' ? 'ORANGE' : key === 'blue' ? 'BLUE' : key.toUpperCase();
