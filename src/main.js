@@ -805,6 +805,7 @@ const expeditionHUD = new ExpeditionHUD({
   held,
   toast,
   settingsUI,
+  terrain,
 });
 
 setBootProgress(0.9, 'PREPARING HIGH-RESOLUTION TARGETS');

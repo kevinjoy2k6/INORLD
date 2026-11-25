@@ -201,6 +201,29 @@ body.xh-settings-open #xh-hud {
   gap: 6px;
 }
 
+/* Local chart. Round and heading-up: the canvas is the whole frame, the CSS
+   only gives it a rim. Vector drawing, so no pixelated upscale any more. */
+.xh-map {
+  position: relative;
+  /* Square by construction: the chart draws a circle into a square canvas, so a
+     stretched box would turn it into an ellipse. Capped so it never dominates
+     the pill. */
+  width: min(100%, 148px);
+  aspect-ratio: 1 / 1;
+  margin-inline: auto;
+  border: 1px solid var(--xh-line);
+  border-radius: 50%;
+  overflow: hidden;
+  background: #14181a;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.45), 0 2px 10px rgba(0, 0, 0, 0.35);
+}
+
+.xh-map-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
 .xh-room {
   display: flex;
   align-items: center;

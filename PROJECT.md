@@ -1013,8 +1013,9 @@ cockpit `#touch-ui`, settings modal, expedition panels `#panel-gearbox`,
 `#hud-net*`, `#hud-patch`, `#hud-timber`, `#hud-watchtowers`, `#hud-tier`,
 `#btn-awd|diff|winch|hitch|refuel|help|camera|tier|touch`, plus the legacy
 readouts `#hud-speed|gear|rpm|rpm-bar|fuel|fuel-bar|fuel-rate|psi|sink|surface|
-quality |fps |physics|camera|trailer`, and the objective bearing row
-`[data-xh-bearing-row]` / `[data-xh-bearing]` / `[data-xh-heading]`.
+quality |fps |physics|camera|trailer`, the objective bearing row
+`[data-xh-bearing-row]` / `[data-xh-bearing]` / `[data-xh-heading]`, and the local
+chart `[data-xh-map-wrap]` / `canvas[data-xh-map]`.
 
 ### 14.2 Who owns what
 
@@ -1022,8 +1023,11 @@ quality |fps |physics|camera|trailer`, and the objective bearing row
   buttons, network callbacks, `_inLobby` flag.
 - `ExpeditionHUD` — gear gate, CTIS cluster, drivetrain rockers, expedition pill
   (room, squad distances, watchtower/timber counters and the **NEXT** row: the
-  objective label + live distance from `MissionManager.nextObjective()`), mobile
-  cockpit. Never owns simulation state; calls the same APIs as the keyboard.
+  objective label + live distance from `MissionManager.nextObjective()`, plus the
+  **local chart**), mobile cockpit. Never owns simulation state; calls the same
+  APIs as the keyboard.
+- `FieldChart` — the round heading-up chart inside the pill (§14.4). Owns only
+  its canvas.
 - `GraphicsSettingsUI` — three tabs (Graphics & Performance / Controls & Mobile UI
   / Audio & Atmosphere), hardware banner, presets, every optimizer knob.
 - `main.js` — the legacy HUD element cache, `toast()`, and the co-op failure
@@ -1034,7 +1038,36 @@ quality |fps |physics|camera|trailer`, and the objective bearing row
 ### 14.3 Rates
 
 HUD/telemetry DOM: **12.5 Hz** (`hudRefresh >= 0.08`). FPS text and smoothing:
-10 Hz. Settings drawer: 12.5 Hz. Nothing else writes DOM per frame.
+10 Hz. Settings drawer: 12.5 Hz. Nothing else writes DOM per frame. The chart
+redraws on the same HUD tick, so it costs at most 12.5 blits a second.
+
+### 14.4 Local chart (`FieldChart`)
+
+Round and **heading-up**: the truck sits at the centre pointing up, the valley
+rotates under it, and the compass ring turns so `N` is really north. 400 m across
+(200 m radius), in the expedition pill under the NEXT/bearing rows. This replaced
+the earlier north-up raster minimap outright — no bitmap, no pixelated blit.
+
+- **Vector, built once.** `_build()` halves the height grid to 209² (every second
+  terrain vertex, ~9.8 m cells), runs marching squares over it for four elevation
+  bands — levels taken from the height *quantiles* (18/42/66/86 %), because this
+  valley is a low plain and min/max levels left nine tenths of the chart blank —
+  and over the water depth grid for a shoreline and a deep-water fill, then turns
+  `ROADS` into road and trail `Path2D`s in world metres. Terrain is never sampled
+  per frame and nothing is rasterised.
+- **Per tick.** Clear, clip the circle, `rotate(-heading)`, scale (px/m), translate
+  to the truck; fill the bands, shore and deep water; stroke the contour hairlines,
+  the road casing + sand ribbon and the dashed trails; then draw the 100 m / 200 m
+  range rings, the ring and its 30° ticks with `N/E/S/W` placed at `bearing −
+  heading`, the cream chevron fixed at the centre, the objective and its distance
+  plate. Seven path fills/strokes and a dozen small shapes at 12.5 Hz.
+- **Objective.** Amber diamond at the target with a hairline to the truck while it
+  is inside the radius; beyond that, an amber arrowhead on the ring pointing the
+  way, plus a `m` / `km` plate along the bottom of the circle.
+- **Cost.** `chart.buildMs`, `chart.lastDrawMs` and `chart.segments` report the real
+  build time, per-frame cost and contour segment count.
+- **Style.** Flat fills, cream hairlines, one amber accent; the coarse contour step
+  keeps the drawing faceted rather than survey-grade.
 
 ---
 
@@ -1072,6 +1105,13 @@ HUD/telemetry DOM: **12.5 Hz** (`hudRefresh >= 0.08`). FPS text and smoothing:
   Bridge site search samples a 190 m half-extent on an 8 m grid and prefers a
   water crossing.
 - State crosses the wire via `getState()/setState()` and `mission-event`.
+- **Local save** (`INORLD_EXPEDITION`): scouted towers, `bundlesDelivered`, the
+  bundle still on the trailer and `bridgeBuilt` are written on every change and
+  replayed in `setup()` after the zones and the span exist (`_restoreLocal()` →
+  `_applyBridgeBuilt()`, silent — no toasts). Unknown tower ids and out-of-range
+  counts are dropped, so a stale save cannot corrupt a build. `_canPersist()` is
+  false for a `joiner`: co-op state arrives from the host in `host-sync` and is
+  never written back over the player's own expedition.
 - `nextObjective(position)` is the single source of truth for "where now": the
   bridge while `bundlesInTrailer > 0`, else the nearest undiscovered watchtower,
   else the mill while fewer than two bundles are delivered. Returns
@@ -1189,7 +1229,9 @@ hooks; prefer them over editing code to observe behaviour.
 | `__perf()` | prints and returns `{ fps, governorFps, target, scale, cap, degrade, tier, preset, calls, triangles, buffer, css, dpr, mesaTiles, boot }` |
 | `__inputs` | live `{ keys, held }` — what a stuck-key report should be checked against |
 | `__gamepad` | parsed pad state `{ connected, id, steer, throttle, brake, handbrake }` |
+| `__game.expeditionHUD.map` | the local chart: `{ base, buildMs, lastDrawMs, _size }` — the one-off bake and the real per-tick cost |
 | `INORLD_CAMERA` | localStorage key: the camera mode is restored at boot |
+| `INORLD_EXPEDITION` | localStorage key: `{ v, discovered[], bundlesDelivered, bundlesInTrailer, bridgeBuilt, savedAt }` — the solo/host expedition, restored in `MissionManager.setup()` |
 | `__fpsScale` | current dynamic pixel ratio |
 | `__fpsDegrade` | current ladder rung 0–5 |
 | `__fpsSmoothed` | smoothed frame rate |
@@ -1301,6 +1343,8 @@ frame, so read the stats after a render or via `captureRenderStats`.
 | playability pass | **gamepad support** (stick + triggers + handbrake, blended with keyboard/touch), **settings drawer pauses the world** (the truck used to roll while a slider was dragged), **objective bearing compass** in the expedition pill (arrow relative to the nose plus degrees/cardinal), **camera mode persists** in `INORLD_CAMERA` |
 | ten improvements | **superresolution budget** (`sqrt(4.2 MP / viewport)` caps the governor, re-applied on resize), **warm-up ceiling** (release after 3 frames or 2.5 s), **loader tips + detected tier line**, **`prefers-reduced-motion`** for spinner/bar/pulse, **input release on blur or tab hide** (a held key never fires keyup on alt-tab), **low-fuel HUD pulse**, **`?preset=` session override**, **shadow-map texel snapping** (stops shadow crawl as the truck creeps), **`__perf()` snapshot**, `__inputs` debug handle |
 | high-res / 60 FPS | **native-resolution pass + gated boot**: governor target 120 → 60 with a native 1× floor and optional 1–2× supersampling; degradation now sheds post-FX/shadows/foliage/draw distance instead of shrinking the canvas; loading screen with a progress bar over an inert lobby, three rendered warm frames before release; `MesaField` rebaked into 256 m tiles (127 chunks, ~236k submitted triangles vs ~595k, 39.2k stone triangles); water 128² quads and 90/140 ms mirror cadence; station meshes merged and distance-culled; HIGH shadows 4096 → 2048 and DPR 2.5 → 2; MSAA enabled on LOW |
+| field chart | **the minimap was scrapped and rebuilt as a vector chart**: `FieldChart` (replacing `ExpeditionMap`) is round and heading-up — four marching-squares elevation bands whose levels are height quantiles (18/42/66/86 %, so the plain actually shades), a shoreline plus deep-water fill, road casings and dashed trails as `Path2D`s in world metres, 100/200 m range rings, a compass ring that turns (N/E/S/W at `bearing − heading`), the chevron pinned at the centre pointing up, and the next objective as an amber diamond, or a ring arrowhead plus a distance plate when it is off-chart; a frame is one clip and ten path fills/strokes, `chart.buildMs`/`lastDrawMs`/`segments` expose the costs; the bearing row was also corrected to measure compass angles from north (`atan2(x, −z)`) so its cardinal matches the ring |
+| local expedition | **progress persists**: `MissionManager` writes `INORLD_EXPEDITION` on every mission change (towers, delivered bundles, the load on the trailer, the bridge) and replays it during `setup()`; a joiner never writes the host's state to its own save, and the second HUD timer now reads `bundlesDelivered` instead of a field that never existed |
 | low-poly/sharp | **low-poly + crisp pass**: nine-tap unsharp-mask `ShaderPass` (strength 0.9, contrast-gated) after the grade, bloom strength cut across all phases and region palettes (0.34 → 0.16 max) with a 0.32 radius, grade contrast 1.1 → 1.16, five-sided trunks/poles, six-sided pines, 20-facet boulders, all flat-shaded |
 
 Earlier work still in force: 150 m chunked props with distance LOD and far proxies,
@@ -1328,6 +1372,14 @@ for f in src/*.js src/audio/*.js; do node --check "$f" || echo "FAIL $f"; done
 4. `?test`: the proving-ground audit table prints and every zone is reachable.
 5. Co-op: host a room, join from another tab with the code; both trucks mirror at
    20 Hz, mission and winch events propagate.
+6. Chart: in solo, the pill shows a north-up square with roads, the river and an
+   amber objective diamond; drive a curve and the chevron turns while the map
+   stays north-up. `__game.expeditionHUD.map.lastDrawMs` should be well under a
+   millisecond and `buildMs` a one-off on the first draw.
+7. Progress: scout a tower, deliver a bundle, reload — the tower stays scouted,
+   `TIMBER` still shows the delivery and a finished bridge is still driveable
+   (`__game.missionManager.getState()`). Join a room as a guest and confirm
+   `INORLD_EXPEDITION` is left untouched.
 
 **Performance**
 

@@ -13,6 +13,11 @@
  *
  * Progress is serialised by getState()/setState() for the join handshake and
  * every change is broadcast as a `mission-event` through NetworkManager.
+ *
+ * A solo expedition also writes itself to localStorage (`INORLD_EXPEDITION`), so
+ * scouted towers, the delivered timber count and the finished bridge survive a
+ * reload. Co-op still comes from the host: a joiner is handed the room's state
+ * in `host-sync` and never writes that state over its own local expedition.
  * ========================================================================== */
 
 import * as THREE from 'three';
@@ -21,6 +26,16 @@ import * as CANNON from 'cannon-es';
 
 const BUNDLES_NEEDED = 2;
 const BUNDLE_MIN = 1;
+
+const STORAGE_KEY = 'INORLD_EXPEDITION';
+const SAVE_VERSION = 1;
+
+/** Stored numbers come from a browser that may be on an older/newer build. */
+function clampInt(value, min, max) {
+  const n = Math.trunc(Number(value));
+  if (!Number.isFinite(n)) return min;
+  return Math.min(max, Math.max(min, n));
+}
 
 export class MissionManager {
   constructor({
@@ -119,6 +134,10 @@ export class MissionManager {
     };
     this._buildBrokenBridge(this.bridgeZone);
     this._buildBridgeSpan(this.bridgeZone);
+
+    // Everything the save refers to now exists, so the last expedition can be
+    // put back: towers, delivered loads and the span itself.
+    this._restoreLocal();
   }
 
   /* ================================================================== *
@@ -459,7 +478,7 @@ export class MissionManager {
     this._applyFogReveal(this.discovered.size);
 
     this._toast(`SCOUTED ${this.discovered.size}/3 — ${tw.name.toUpperCase()}`, 'good');
-    this.onStateChange?.(this.getState());
+    this._notify();
 
     this.networkManager?.sendMissionEvent('discover', { towerId });
     return true;
@@ -500,7 +519,7 @@ export class MissionManager {
       take > 1 ? `LOADED ${take} TIMBER BUNDLES — CONVOY RUN` : 'LOADED 1 TIMBER BUNDLE',
       'good',
     );
-    this.onStateChange?.(this.getState());
+    this._notify();
     this.networkManager?.sendMissionEvent('timber-load', { bundles: take });
   }
 
@@ -509,6 +528,7 @@ export class MissionManager {
     this.bundlesInTrailer = 0;
     this.timberLoaded = false;
     this._syncTrailerVisual();
+    this._persistLocal();
     this.networkManager?.sendMissionEvent('timber-load', { bundles: 0 });
   }
 
@@ -527,24 +547,28 @@ export class MissionManager {
       this._toast(`DELIVERED ${this.bundlesDelivered}/${BUNDLES_NEEDED} — ONE MORE LOAD`, 'good');
     }
 
-    this.onStateChange?.(this.getState());
+    this._notify();
     this.networkManager?.sendMissionEvent('timber-deliver', {
       bundles: amount,
       delivered: this.bundlesDelivered,
     });
   }
 
-  buildBridge(broadcast = true) {
-    if (this.bridgeBuilt) return;
+  /** The side effects of a finished bridge, silent so a save can replay them. */
+  _applyBridgeBuilt() {
     this.bridgeBuilt = true;
     this.bundlesDelivered = BUNDLES_NEEDED;
-
     if (this.bridgeMesh) this.bridgeMesh.visible = true;
     this._addBridgeCollider();
     if (this.millZone?.stack) this.millZone.stack.visible = false;
+  }
+
+  buildBridge(broadcast = true) {
+    if (this.bridgeBuilt) return;
+    this._applyBridgeBuilt();
 
     this._toast('BRIDGE BUILT — RIVER CROSSING OPEN', 'good');
-    this.onStateChange?.(this.getState());
+    this._notify();
     if (broadcast) this.networkManager?.sendMissionEvent('timber-deliver', { bundles: 0, delivered: BUNDLES_NEEDED });
   }
 
@@ -571,7 +595,7 @@ export class MissionManager {
           this.discovered.add(tw.id);
           this._applyFogReveal(this.discovered.size);
           this._toast(`TEAMMATE SCOUTED ${tw.name.toUpperCase()}`);
-          this.onStateChange?.(this.getState());
+          this._notify();
         }
         break;
       }
@@ -594,7 +618,7 @@ export class MissionManager {
         } else if (delivered > this.bundlesDelivered) {
           this.bundlesDelivered = delivered;
           this._toast(`DELIVERED ${delivered}/${BUNDLES_NEEDED}`);
-          this.onStateChange?.(this.getState());
+          this._notify();
         }
         break;
       }
@@ -602,6 +626,78 @@ export class MissionManager {
       default:
         break;
     }
+  }
+
+  /* ================================================================== *
+   *  local persistence
+   * ================================================================== */
+
+  /**
+   * Co-op mission state belongs to the host. A joiner's copy is whatever the
+   * host's `host-sync` delivered, so writing it back would erase this player's
+   * own expedition after one session with a squad. Solo play and hosting save.
+   */
+  _canPersist() {
+    return this.networkManager?.role !== 'joiner';
+  }
+
+  _persistLocal() {
+    if (!this._canPersist()) return;
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        v: SAVE_VERSION,
+        discovered: [...this.discovered],
+        bundlesDelivered: this.bundlesDelivered,
+        bundlesInTrailer: this.bundlesInTrailer,
+        bridgeBuilt: this.bridgeBuilt,
+        savedAt: Date.now(),
+      }));
+    } catch {
+      // Private mode or a full quota: the expedition simply does not persist.
+    }
+  }
+
+  _notify() {
+    this._persistLocal();
+    this.onStateChange?.(this.getState());
+  }
+
+  /** Put a saved expedition back, silently. Runs once, after setup(). */
+  _restoreLocal() {
+    let saved = null;
+    try {
+      const raw = window.localStorage.getItem(STORAGE_KEY);
+      if (!raw) return false;
+      saved = JSON.parse(raw);
+    } catch {
+      return false;
+    }
+    if (!saved || typeof saved !== 'object') return false;
+
+    // A tower that this build no longer has is dropped rather than trusted.
+    const known = new Set(this.watchtowers.map((tw) => tw.id));
+    const discovered = Array.isArray(saved.discovered)
+      ? saved.discovered.filter((id) => known.has(id))
+      : [];
+    this.discovered = new Set(discovered);
+    if (this.discovered.size) this._applyFogReveal(this.discovered.size);
+
+    this.bundlesDelivered = clampInt(saved.bundlesDelivered, 0, BUNDLES_NEEDED);
+    this.bundlesInTrailer = clampInt(
+      saved.bundlesInTrailer,
+      0,
+      BUNDLES_NEEDED - this.bundlesDelivered,
+    );
+    this.timberLoaded = this.bundlesInTrailer > 0;
+    this._syncTrailerVisual();
+
+    if (saved.bridgeBuilt || this.bundlesDelivered >= BUNDLES_NEEDED) {
+      this._applyBridgeBuilt();
+    }
+
+    this._lastTowerCount = this.discovered.size;
+    this._lastDelivered = this.bundlesDelivered;
+    return true;
   }
 
   /* ================================================================== *

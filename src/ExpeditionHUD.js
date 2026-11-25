@@ -17,6 +17,7 @@
  * ========================================================================== */
 
 import { CAMERA_MODE_LABEL } from './CameraController.js';
+import { FieldChart } from './FieldChart.js';
 
 function el(tag, className, html) {
   const node = document.createElement(tag);
@@ -63,8 +64,10 @@ export class ExpeditionHUD {
     held,
     toast,
     settingsUI = null,
+    terrain = null,
   }) {
     this.optimizer = optimizer;
+    this.terrain = terrain;
     this.vehicle = vehicle;
     this.trailer = trailer;
     this.winchSystem = winchSystem;
@@ -86,6 +89,11 @@ export class ExpeditionHUD {
     this._pointers = new Map();
 
     this._build();
+    // The chart builds its paths on the first draw, not here: boot already has
+    // a world to build, and a lobby player is not navigating yet.
+    this.map = this.terrain && this.refs.map
+      ? new FieldChart({ terrain: this.terrain, canvas: this.refs.map })
+      : null;
     this._bind();
     this.applySettings(this.optimizer.settings);
     this.optimizer.subscribe((settings) => this.applySettings(settings));
@@ -117,6 +125,10 @@ export class ExpeditionHUD {
             <span class="xh-bearing-text"><b data-xh-heading>—</b><small>BEARING</small></span>
           </div>
           <div class="xh-progress"><i data-xh-mission-bar></i></div>
+          <div class="xh-map" data-xh-map-wrap>
+            <canvas class="xh-map-canvas" data-xh-map width="132" height="132" role="img"
+                    aria-label="Heading-up chart: truck in the centre pointing up, roads and water around it, next objective in amber"></canvas>
+          </div>
           <button class="xh-btn rust wide" type="button" data-xh-sos>⛑ SOS WINCH BEACON <kbd>H</kbd></button>
         </div>
       </div>
@@ -389,6 +401,8 @@ export class ExpeditionHUD {
       bearingRow: q('[data-xh-bearing-row]'),
       bearing: q('[data-xh-bearing]'),
       heading: q('[data-xh-heading]'),
+      map: q('[data-xh-map]'),
+      mapWrap: q('[data-xh-map-wrap]'),
     };
   }
 
@@ -798,10 +812,20 @@ export class ExpeditionHUD {
     const missionPct = towersTotal + 2 > 0 ? ((towersFound + timber) / (towersTotal + 2)) * 100 : 0;
     refs.missionBar.style.width = `${missionPct.toFixed(0)}%`;
 
-    // Where to drive next, and how far. The valley has no minimap, so without
-    // this the only navigation aid was finding a watchtower by accident.
+    // Truck frame, shared by the bearing arrow and the chart: forward (0,0,1)
+    // rotated by the body quaternion, without importing three.
+    const body = this.vehicle.body;
+    const bq = body.quaternion;
+    const forwardX = 2 * (bq.x * bq.z + bq.w * bq.y);
+    const forwardZ = 1 - 2 * (bq.x * bq.x + bq.y * bq.y);
+    // The chart is north-up (+x right, +z down), so this is the angle that turns
+    // a chevron drawn pointing up onto the truck's nose.
+    const headingRad = Math.atan2(forwardX, -forwardZ);
+
+    // Where to drive next, and how far. The chart below is the answer to the
+    // other half of the question: which way round, not just which way.
+    const objective = this.missionManager.nextObjective?.(body.position) || null;
     if (refs.next && refs.nextLabel) {
-      const objective = this.missionManager.nextObjective?.(this.vehicle.body.position);
       if (objective) {
         refs.nextLabel.textContent = objective.label;
         refs.next.textContent = objective.distance >= 1000
@@ -810,17 +834,14 @@ export class ExpeditionHUD {
         // Bearing to the objective relative to the truck's nose: the arrow
         // points where to steer, which is faster to read than a distance.
         if (refs.bearingRow && refs.bearing && refs.heading && objective.zone && objective.zone.pos) {
-          const body = this.vehicle.body;
-          const q = body.quaternion;
-          // Forward (0,0,1) rotated by the body quaternion, without importing three.
-          const forwardX = 2 * (q.x * q.z + q.w * q.y);
-          const forwardZ = 1 - 2 * (q.x * q.x + q.y * q.y);
           const toX = objective.zone.pos.x - body.position.x;
           const toZ = objective.zone.pos.z - body.position.z;
-          const headingDeg = (Math.atan2(forwardX, forwardZ) * 180) / Math.PI;
-          const bearingDeg = (Math.atan2(toX, toZ) * 180) / Math.PI;
-          const relative = ((bearingDeg - headingDeg + 540) % 360) - 180;
-          const compass = ((bearingDeg % 360) + 360) % 360;
+          // Compass bearings run clockwise from north (-z), the same frame the
+          // chart's ring letters use: atan2(x, -z). Both angles are measured in
+          // that frame, so the arrow and the chart never disagree.
+          const headingDeg = (headingRad * 180) / Math.PI;
+          const compass = ((Math.atan2(toX, -toZ) * 180) / Math.PI + 360) % 360;
+          const relative = ((compass - headingDeg + 540) % 360) - 180;
           const cardinals = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
           refs.bearingRow.hidden = false;
           refs.bearing.style.transform = `rotate(${relative.toFixed(0)}deg)`;
@@ -831,6 +852,11 @@ export class ExpeditionHUD {
         refs.next.textContent = 'ALL CLEAR';
         if (refs.bearingRow) refs.bearingRow.hidden = true;
       }
+    }
+
+    /* ---- local chart: heading-up, one rotate/scale and a few path draws ---- */
+    if (this.map) {
+      this.map.draw({ x: body.position.x, z: body.position.z, headingRad, objective });
     }
 
     /* ---- PSI cluster ---- */

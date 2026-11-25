@@ -548,9 +548,10 @@ export class UIManager {
       this._hudWatchtowers.textContent = `${scouted}/${total}`;
     }
     if (this._hudTimber) {
-      const delivered = this.missionManager?.deliveryDelivered ? 2 : 0;
+      const delivered = this.missionManager?.bundlesDelivered ?? 0;
+      const bridgeBuilt = !!this.missionManager?.bridgeBuilt;
       this._hudTimber.textContent = `${delivered}/2`;
-      this._hudTimber.classList.toggle('done', !!this.missionManager?.deliveryDelivered);
+      this._hudTimber.classList.toggle('done', bridgeBuilt);
     }
 
     // Squad list.
