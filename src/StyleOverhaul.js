@@ -115,7 +115,7 @@ export function applyStylePalette() {
   // the other three are the same ground under a different sky.
   const regionTints = {
     meadow: 0xf0cf8b,
-    canyon: 0xefd6a2,
+    canyon: 0xb9c3ca,
     alpine: 0xd7dfd2,
     coast: 0xf2e0ae,
   };
@@ -207,7 +207,7 @@ export class StyleOverhaul {
     // palette: golden meadow, rust canyon, cold alpine, bleached coast.
     this._regionTints = {
       meadow: 0xe9b667,
-      canyon: 0xe0a888,
+      canyon: 0x9eabb7,
       alpine: 0x9fb4c6,
       coast: 0xefd9b3,
     };

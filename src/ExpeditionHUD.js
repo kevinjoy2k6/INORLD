@@ -17,7 +17,7 @@
  * ========================================================================== */
 
 import { CAMERA_MODE_LABEL } from './CameraController.js';
-import { FieldChart } from './FieldChart.js';
+import { TrailAtlas } from './TrailAtlas.js';
 
 function el(tag, className, html) {
   const node = document.createElement(tag);
@@ -82,17 +82,17 @@ export class ExpeditionHUD {
 
     this.visible = false;
     this.pillCollapsed = false;
-    this._uiTimer = 0;
+
     this._telemetry = null;
     this._psiDragging = false;
     this._holdTimers = new Map();
     this._pointers = new Map();
 
     this._build();
-    // The chart builds its paths on the first draw, not here: boot already has
+    // The atlas builds its paths on the first draw, not here: boot already has
     // a world to build, and a lobby player is not navigating yet.
     this.map = this.terrain && this.refs.map
-      ? new FieldChart({ terrain: this.terrain, canvas: this.refs.map })
+      ? new TrailAtlas({ terrain: this.terrain, canvas: this.refs.map })
       : null;
     this._bind();
     this.applySettings(this.optimizer.settings);
@@ -126,8 +126,9 @@ export class ExpeditionHUD {
           </div>
           <div class="xh-progress"><i data-xh-mission-bar></i></div>
           <div class="xh-map" data-xh-map-wrap>
-            <canvas class="xh-map-canvas" data-xh-map width="132" height="132" role="img"
-                    aria-label="Heading-up chart: truck in the centre pointing up, roads and water around it, next objective in amber"></canvas>
+            <div class="xh-map-head"><b>TRAIL ATLAS</b><span>200 M · HEADING UP</span></div>
+            <canvas class="xh-map-canvas" data-xh-map width="208" height="144" role="img"
+                    aria-label="Trail Atlas: heading-up low-poly terrain, roads and water, centred truck and amber objective"></canvas>
           </div>
           <button class="xh-btn rust wide" type="button" data-xh-sos>⛑ SOS WINCH BEACON <kbd>H</kbd></button>
         </div>
@@ -777,10 +778,7 @@ export class ExpeditionHUD {
     if (!this.visible) return;
     this._telemetry = telemetry;
 
-    this._uiTimer += dt;
-    if (this._uiTimer < 0.08) return;
-    const step = this._uiTimer;
-    this._uiTimer = 0;
+    // main.js owns the single 12.5 Hz HUD clock; do not throttle a second time.
 
     const t = telemetry || this.vehicle.getTelemetry();
     const refs = this.refs;

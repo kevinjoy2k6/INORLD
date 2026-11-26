@@ -308,7 +308,7 @@ function createGrassTuftGeometry(height = 1.35, halfWidth = 0.09) {
 }
 
 const SIZE = WORLD.size;
-// 176 cells over 640 m = 3.6 m facets. The flat-shaded style wants planes you
+// 416 cells over 2048 m ≈ 4.92 m facets. The flat-shaded style wants planes you
 // can read as planes; 2 m cells were small enough to look smooth.
 const SEGMENTS = 416;
 const ELEMENT = SIZE / SEGMENTS;
@@ -427,7 +427,7 @@ export class TerrainSystem {
     // Time of the last hand-back to the browser, and the shared record the
     // trail-field lookup fills in. Both are build/terrain-wide, not per-call.
     this._yieldAt = 0;
-    this._trailSample = { distance: 0, height: 0, width: 0 };
+    this._trailSample = { distance: 0, height: 0, coreHeight: 0, width: 0 };
   }
 
   /* ---------------- sliced build ---------------- */
@@ -526,7 +526,11 @@ export class TerrainSystem {
     // to 3.5 m of water; the bank is dry and still hugs the river.
     const bank = [];
     for (let x = -this.halfSize + 90; x <= this.halfSize - 90; x += 60) {
-      bank.push([x, clampNumber(this.riverZ(x) + 55, -this.halfSize + 70, this.halfSize - 70)]);
+      bank.push([x, clampNumber(
+        this.riverZ(x) + this.riverHalfWidthAt(x) + 20,
+        -this.halfSize + 70,
+        this.halfSize - 70,
+      )]);
     }
     paths.push(bank);
     this.pathWidths.push(3.4);
@@ -744,100 +748,161 @@ export class TerrainSystem {
   }
 
   riverZ(x) {
-    // Same meander, scaled: the river has to cross a 2 km map, not 640 m.
     const dx = x / WORLD_SCALE;
-    return WORLD_SCALE * (-26 + 16 * Math.sin(dx * 0.0095) + 5 * Math.sin(dx * 0.028 + 1.6));
+    return WORLD_SCALE * (
+      -34 + 15 * Math.sin(dx * 0.0085 + 0.4)
+      + 7 * Math.sin(dx * 0.021 - 1.1)
+      + 2.8 * Math.sin(dx * 0.047)
+    );
   }
 
+  /** Half-width in world metres; the eastern reach opens into an estuary. */
+  riverHalfWidthAt(x) {
+    const dx = x / WORLD_SCALE;
+    const estuary = smoothstep(185, 318, dx);
+    const width = 6.2
+      + 1.8 * (0.5 + 0.5 * Math.sin(dx * 0.026 + 0.7))
+      + 1.2 * (0.5 + 0.5 * Math.sin(dx * 0.051 - 0.4))
+      + 14 * estuary;
+    return width * WORLD_SCALE;
+  }
   bogCentre() {
     return { x: -78 * WORLD_SCALE, z: -62 * WORLD_SCALE };
   }
 
   /* ---------------- height ---------------- */
 
-  /** Height at a world position: metres in, design-space noise inside. */
+  /** A new, domain-warped landscape; all fields are deterministic in metres. */
   _baseHeight(xMetres, zMetres) {
     const a = this.noiseA;
     const b = this.noiseB;
     const c = this.noiseC;
-
-    // The shape below was authored for a 640 m valley. Sampling it in design
-    // space stretches the same ridges, peaks and ledges across the 2 km map,
-    // so the terrain keeps its character but every slope is 3.2x longer —
-    // which is what makes it smooth to drive instead of a field of bumps.
     const x = xMetres / WORLD_SCALE;
     const z = zMetres / WORLD_SCALE;
 
-    // Rolling valley floor.
-    let h = 6.4 + fbm(a, x * 0.0065, z * 0.0065, 4) * 3.6;
-    h += fbm(c, x * 0.021, z * 0.021, 2) * 0.5;
+    // Independent low-frequency warp and roll fields make broad landforms,
+    // not the old valley floor with a peak and quantized west bolted on.
+    const warpX = fbm(c, x * 0.0035 + 8, z * 0.0035 - 3, 3) * 22;
+    const warpZ = fbm(c, x * 0.0035 - 11, z * 0.0035 + 5, 3) * 18;
+    const wx = x + warpX;
+    const wz = z + warpZ;
+    const broad = fbm(a, wx * 0.0052, wz * 0.0052, 4);
+    const rolls = fbm(c, wx * 0.0115 + 4, wz * 0.0115 - 9, 3);
+    let h = 7.2 + broad * 5.4 + rolls * 1.2;
 
-    // Mountain wall to the north.
-    const north = smoothstep(48, 168, z);
-    if (north > 0) {
-      const ridge = 1 - Math.abs(fbm(b, x * 0.0042, z * 0.0042, 4));
-      h += north * Math.pow(clamp01(ridge), 2.2) * 58;
-    }
+    // Eastern granite shelves: broad treads with short, rounded risers.
+    const canyonMask = smoothstep(12, 105, x) * (1 - smoothstep(105, 165, z));
+    const shelfField = 12 + smoothstep(35, 280, x) * 20
+      + (fbm(b, wx * 0.006 - 5, wz * 0.006 + 12, 3) * 0.5 + 0.5) * 15;
+    const shelfStep = 5.5;
+    const shelfBase = Math.floor(shelfField / shelfStep) * shelfStep;
+    const shelfFraction = (shelfField - shelfBase) / shelfStep;
+    const shelves = shelfBase + smoothstep(0.58, 0.96, shelfFraction) * shelfStep + 4;
+    h = lerp(h, shelves, canyonMask * 0.88);
 
-    // Alpine peak.
-    const peakDistance = Math.hypot((x - 68) * 0.85, z - 148);
-    if (peakDistance < 108) {
-      h += Math.pow(1 - peakDistance / 108, 1.9) * 74;
-    }
+    // A diagonal alpine ridge sweeps across the north instead of one cone.
+    const north = smoothstep(62, 178, z);
+    const ridgeAxis = 166 + x * 0.1 + 18 * Math.sin(x * 0.009 + 0.5)
+      + 12 * fbm(b, x * 0.004, 17, 3);
+    const ridgeDistance = (z - ridgeAxis) / 72;
+    const crest = Math.exp(-ridgeDistance * ridgeDistance * 1.3);
+    const ridgeNoise = 0.5 + 0.5 * fbm(b, wx * 0.0048 + 20, wz * 0.0048 - 6, 4);
+    const ridge = 15 + north * 24 + crest * (22 + 30 * ridgeNoise)
+      + Math.max(0, fbm(c, x * 0.009, z * 0.009, 3)) * 5 * north;
+    h = lerp(h, ridge, north);
 
-    // Rocky ledges to the west, quantised into steps.
-    const west = smoothstep(-88, -178, x);
-    if (west > 0.01) {
-      const stepNoise = fbm(b, x * 0.012, z * 0.012, 2);
-      const stepped = Math.round((h + stepNoise * 3) / 4.2) * 4.2;
-      h = lerp(h, stepped + 14, west);
-    }
+    // Pale southern flats stay dry along the authored coastal road; only the
+    // outer edge falls into the sea.
+    const coastMask = 1 - smoothstep(-214, -158, z);
+    const coastalRoll = 2.8 + fbm(c, x * 0.005 + 13, z * 0.005 - 2, 3) * 1.1
+      + smoothstep(-260, -170, z) * 3;
+    const sea = smoothstep(-292, -320, z);
+    const coastal = lerp(coastalRoll, -4.5 + broad * 0.4, sea);
+    h = lerp(h, coastal, coastMask);
 
-    // Mud bog basin.
+    // The existing bog location remains a shallow, drivable basin.
     const bog = this.bogCentre();
-    const bogDistance = Math.hypot(x - bog.x, z - bog.z);
-    if (bogDistance < 58) {
-      h -= (1 - smoothstep(12, 58, bogDistance)) * 4.9;
-    }
+    const bogDistance = Math.hypot(x - bog.x / WORLD_SCALE, z - bog.z / WORLD_SCALE);
+    h -= (1 - smoothstep(8, 30, bogDistance)) * 4.2;
 
     return h;
   }
 
-  /** Base terrain + the region's own character (meadow rolls, canyon steps). */
   _shapedHeight(x, z) {
-    let h = this._baseHeight(x, z);
-    const coast = z < -170 * WORLD_SCALE;
-    if (!coast && h < 2.15) h = 2.15;
-    const region = regionAt(x, z);
-    if (region.shape) h = region.shape(h, x, z, (a, b) => this.noiseB(a, b));
-    if (!coast && h < 1.6) h = 1.6;
-    return h;
+    const h = this._baseHeight(x, z);
+    return z < -170 * WORLD_SCALE ? h : Math.max(2.0, h);
+  }
+
+  /** Pin every water-crossing waypoint to the stock-safe ford floor. */
+  _pinFords() {
+    this.fordPins = this.trailPoints.map((path) => path.map(() => false));
+    for (let p = 0; p < this.trailPoints.length; p += 1) {
+      const path = this.trailPoints[p];
+      for (let k = 0; k < path.length; k += 1) {
+        const [x, z] = path[k];
+        if (Math.abs(z - this.riverZ(x)) > this.riverHalfWidthAt(x) * 0.7) continue;
+        this.trailHeights[p][k] = FORD_FLOOR;
+        this.trailPins[p][k] = FORD_FLOOR;
+        this.fordPins[p][k] = true;
+      }
+    }
+  }
+
+  /** Shared crossings are constraints, not immutable walls: relax them together. */
+  _relaxJunctions() {
+    const groups = new Map();
+    for (let p = 0; p < this.trailPoints.length; p += 1) {
+      for (let k = 0; k < this.trailPoints[p].length; k += 1) {
+        if (this.trailPins[p][k] === null || this.trailPins[p][k] === undefined) continue;
+        const [x, z] = this.trailPoints[p][k];
+        const key = `${x.toFixed(3)},${z.toFixed(3)}`;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push([p, k]);
+      }
+    }
+    for (const group of groups.values()) {
+      if (group.length < 2) continue;
+      const ford = group.some(([p, k]) => this.fordPins[p][k]);
+      const target = ford ? FORD_FLOOR : group.reduce(
+        (sum, [p, k]) => sum + this.trailHeights[p][k], 0,
+      ) / group.length;
+      for (const [p, k] of group) {
+        this.trailHeights[p][k] = target;
+        this.trailPins[p][k] = target;
+      }
+    }
   }
 
   async _generateHeightGrid() {
-    // Sample every waypoint so the trail can be flattened to its own grade,
-    // with fords kept shallow and every leg climbable.
     this.trailHeights = this.trailPoints.map((path) =>
       path.map(([x, z]) => Math.max(this._shapedHeight(x, z), FORD_FLOOR)),
     );
-    // Every leg climbable, then pinned where tracks cross, then graded again to
-    // meet those pins: the corridor is graded to these heights, so this is what
-    // decides how steep the drive is.
     this.trailPins = this.trailPoints.map((path) => path.map(() => null));
+    this.fordPins = this.trailPoints.map((path) => path.map(() => false));
+    const fordLimits = (index) => this.fordPins[index].map((ford) => ford ? FORD_FLOOR : null);
     const limitAll = () => this.trailPoints.forEach((path, index) =>
-      this._limitTrailGrade(path, this.trailHeights[index], this.trailPins[index]));
+      this._limitTrailGrade(path, this.trailHeights[index], fordLimits(index)));
+
     limitAll();
     this._stitchCrossings();
     this._pinSharedEnds();
-    limitAll();
-    // Grade alone leaves creases: a crest that turns from a climb straight into
-    // a drop is where a 2.8 m wheelbase beaches itself, so the profile is
-    // rounded and graded again.
+    this._pinFords();
+
+    // Alternate grade projection with shared-height projection. Nearby
+    // crossings can otherwise demand mutually impossible fixed elevations.
+    for (let pass = 0; pass < 12; pass += 1) {
+      limitAll();
+      this._relaxJunctions();
+    }
     for (let pass = 0; pass < 2; pass += 1) {
       this.trailPoints.forEach((path, index) =>
-        this._smoothTrailProfile(path, this.trailHeights[index], this.trailPins[index]));
-      limitAll();
+        this._smoothTrailProfile(path, this.trailHeights[index], fordLimits(index)));
+      for (let relax = 0; relax < 5; relax += 1) {
+        limitAll();
+        this._relaxJunctions();
+      }
     }
+    limitAll();
 
     if (this.testMode) {
       this.provingDatum = resolveDatum((x, z) => this._baseHeight(x, z));
@@ -868,8 +933,15 @@ export class TerrainSystem {
           // centreline, which showed up as a 35 degree kink in the surface.
           const inner = Math.max(trail.width * 0.6, ELEMENT * 0.6);
           const w = 1 - smoothstep(inner, corridor, trail.distance);
-          trailWeight = w * 0.98;
-          h = lerp(h, trail.height, trailWeight);
+          const riverDistanceNow = Math.abs(z - this.riverZ(x));
+          const riverBlend = 1 - smoothstep(
+            this.riverHalfWidthAt(x) * 0.65,
+            this.riverHalfWidthAt(x) + 18,
+            riverDistanceNow,
+          );
+          const targetHeight = lerp(trail.height, trail.coreHeight, riverBlend);
+          trailWeight = w * (0.98 + riverBlend * 0.02);
+          h = lerp(h, targetHeight, trailWeight);
         }
 
         // Carve the river last, but never through the graded trail itself: the
@@ -877,10 +949,12 @@ export class TerrainSystem {
         // bed, past the depth a stock intake can breathe. Scaling it by the
         // trail's own weight leaves a shallow crossing at the trail's grade.
         const riverDistance = Math.abs(z - this.riverZ(x));
-        if (riverDistance < 34) {
-          const w = 1 - smoothstep(4.5, 34, riverDistance);
+        const riverHalfWidth = this.riverHalfWidthAt(x);
+        if (riverDistance < riverHalfWidth + 18) {
+          const w = 1 - smoothstep(riverHalfWidth * 0.45, riverHalfWidth + 18, riverDistance);
           h = lerp(h, RIVER_BED, w * w * (1 - trailWeight));
         }
+
 
         if (this.testMode) {
           const shaped = shapeProvingGround(x, z, h);
@@ -907,6 +981,7 @@ export class TerrainSystem {
     const count = VERTS * VERTS;
     const distance = new Float32Array(count);
     const height = new Float32Array(count);
+    const coreHeight = new Float32Array(count);
     const width = new Float32Array(count);
     // Where two tracks run within metres of each other — every junction, and
     // the trails that share a shoulder with a road — taking the nearest one
@@ -962,11 +1037,35 @@ export class TerrainSystem {
 
         distance[index] = nearest === Infinity ? 1e9 : nearest;
         height[index] = weightSum > 0 ? heightSum / weightSum : nearestHeight;
+        coreHeight[index] = nearestHeight;
         width[index] = nearestWidth;
       }
     }
 
-    this.trailField = { distance, height, width };
+    // Start from the nearest authored grade: inverse-distance mixtures pull a
+    // centreline toward a different road merely because it runs nearby.
+    height.set(coreHeight);
+    // Diffuse only the cached corridor grades, never the landform grid. Eight
+    // small neighbourhoods remove junction seams without moving any waypoint.
+    const smoothHeight = new Float32Array(height);
+    for (let pass = 0; pass < 8; pass += 1) {
+      for (let i = 1; i < VERTS - 1; i += 1) {
+        for (let j = 1; j < VERTS - 1; j += 1) {
+          const index = i * VERTS + j;
+          if (distance[index] >= BLEND_RADIUS) continue;
+          let sum = height[index] * 2;
+          let weight = 2;
+          for (const neighbour of [index - VERTS, index + VERTS, index - 1, index + 1]) {
+            if (distance[neighbour] >= BLEND_RADIUS) continue;
+            sum += height[neighbour];
+            weight += 1;
+          }
+          smoothHeight[index] = sum / weight;
+        }
+      }
+      height.set(smoothHeight);
+    }
+    this.trailField = { distance, height, coreHeight, width };
   }
 
   /**
@@ -984,6 +1083,7 @@ export class TerrainSystem {
     const sample = this._trailSample;
     sample.distance = field.distance[index];
     sample.height = field.height[index];
+    sample.coreHeight = field.coreHeight[index];
     sample.width = field.width[index];
     return sample;
   }
@@ -998,7 +1098,6 @@ export class TerrainSystem {
         const x = -this.halfSize + i * ELEMENT;
         const index = i * VERTS + j;
         const h = this.heights[index];
-
         const hx = this.heights[Math.min(VERTS - 1, i + 1) * VERTS + j]
           - this.heights[Math.max(0, i - 1) * VERTS + j];
         const hz = this.heights[i * VERTS + Math.min(VERTS - 1, j + 1)]
@@ -1006,31 +1105,36 @@ export class TerrainSystem {
         const slope = Math.hypot(hx, hz) / (2 * ELEMENT);
         this.slopeGrid[index] = slope;
 
+        // noiseD is independent of all three elevation streams. Its broad
+        // patches vary snow lines and granite/sand cover, never tyre grip noise.
+        const dx = x / WORLD_SCALE;
+        const dz = z / WORLD_SCALE;
+        const patch = fbm(this.noiseD, dx * 0.015 + 7, dz * 0.015 - 3, 3);
         const riverDistance = Math.abs(z - this.riverZ(x));
+        const riverHalfWidth = this.riverHalfWidthAt(x);
         const bogDistance = Math.hypot(x - bog.x, z - bog.z);
         const trail = this._trailFieldAt(x, z);
-
         const region = regionAt(x, z);
         let key = 'hardpack';
 
         if (h < WATER_LEVEL - 0.02) {
           key = 'water';
-        } else if (bogDistance < 40 && h < 4.4) {
+        } else if (bogDistance < 82 && h < 4.4) {
           key = 'mud';
         } else if (trail.distance < trail.width * 0.95) {
-          // The graded corridor wins over whatever it crosses.
           key = 'trail';
         } else if (region.id === 'canyon') {
-          key = slope > 0.55 ? 'rock' : 'sand';
+          key = slope > 0.38 || h > 17 + patch * 5 ? 'rock' : 'sand';
         } else if (region.id === 'coast') {
-          key = h < WATER_LEVEL + 1.4 ? 'sand' : 'hardpack';
+          key = slope > 0.5 ? 'rock' : 'sand';
         } else if (region.id === 'alpine') {
-          key = h > 30 ? 'snow' : slope > 0.62 ? 'rock' : 'hardpack';
-        } else if (riverDistance < 22 && h < WATER_LEVEL + 1.6) {
+          const snowLine = 30 + patch * 7;
+          const snowHold = smoothstep(snowLine - 3, snowLine + 5, h)
+            * (1 - smoothstep(0.34, 0.78, slope));
+          key = snowHold > 0.42 ? 'snow' : slope > 0.5 || h > 42 ? 'rock' : 'hardpack';
+        } else if (riverDistance < riverHalfWidth + 12 && h < WATER_LEVEL + 1.8) {
           key = 'sand';
-        } else if (h > 52 || (h > 34 && slope < 0.5)) {
-          key = 'snow';
-        } else if (slope > 0.72) {
+        } else if (slope > 0.68) {
           key = 'rock';
         }
 
@@ -1197,8 +1301,8 @@ export class TerrainSystem {
           const trail = this._trailFieldAt(x, z);
           if (trail.distance < trail.width * 0.5 + 2.4) {
             const scar = 1 - smoothstep(trail.width * 0.5, trail.width * 0.5 + 2.4, trail.distance);
-            const dirt = new THREE.Color(region.palette.dirt ?? 0x6a573c);
-            color.lerp(dirt, scar * 0.82);
+            const dirt = new THREE.Color(region.palette.dirt ?? 0xc9ae7d);
+            color.lerp(dirt, scar * 0.72);
             // Tyre-worn bands, wide enough to survive the 2 m cell size.
             const rut = Math.max(
               1 - Math.abs(trail.distance - 0.85) / 0.6,
@@ -1220,20 +1324,18 @@ export class TerrainSystem {
         // still owns grip, sinkage and the spray the tyres throw.
         if (key === 'snow' && region.id === 'alpine') {
           const rockFace = smoothstep(0.28, 0.75, this.slopeGrid[index]);
-          color.lerp(tint.setHex(0x8a6b57), rockFace * 0.75);
+          color.lerp(tint.setHex(0x98a4ae), rockFace * 0.82);
         }
 
-        // Flat-shaded style: no per-pixel ground noise, but two baked bands of
-        // break-up — a fine grit and a broad mottle — because a single 2% grain
-        // left the sand reading as one solid brown swatch across the valley.
-        const grit = 0.97 + (this.noiseD(x * 0.045, z * 0.045) * 0.5 + 0.5) * 0.06;
-        const mottle = (this.noiseD(x * 0.008 + 11, z * 0.008 - 7) * 0.5 + 0.5) * 0.08 - 0.04;
-        color.multiplyScalar(grit + mottle);
+        // Broad albedo variation only. Fine grit and texture noise fight the
+        // clean palette; the final per-face shade is added below per triangle.
+        const broadTone = fbm(this.noiseD, x * 0.0035 + 11, z * 0.0035 - 7, 2);
+        color.multiplyScalar(0.98 + broadTone * 0.055);
 
         // Broad sage patches through the sand. The ground stays desert; the
         // green is sparse scrub cover, the same weight in every region, so a
         // drive across the map never crosses into a different-looking world.
-        if (key !== 'water' && key !== 'mud' && key !== 'snow' && key !== 'trail') {
+        if (region.id === 'meadow' && key !== 'water' && key !== 'mud' && key !== 'snow' && key !== 'trail') {
           const patch = this.noiseD(x * 0.012 + 40, z * 0.012 - 15);
           const green = THREE.MathUtils.clamp((patch + 0.22) * 1.9, 0, 1);
           if (green > 0) {
@@ -1339,11 +1441,27 @@ export class TerrainSystem {
           }
         }
 
-        const geo = new THREE.BufferGeometry();
-        geo.setAttribute('position', new THREE.BufferAttribute(chunkPos, 3));
-        geo.setAttribute('color', new THREE.BufferAttribute(chunkCol, 3));
-        geo.setAttribute('uv', new THREE.BufferAttribute(chunkUv, 2));
-        geo.setIndex(new THREE.BufferAttribute(chunkIndices, 1));
+        const indexed = new THREE.BufferGeometry();
+        indexed.setAttribute('position', new THREE.BufferAttribute(chunkPos, 3));
+        indexed.setAttribute('color', new THREE.BufferAttribute(chunkCol, 3));
+        indexed.setAttribute('uv', new THREE.BufferAttribute(chunkUv, 2));
+        indexed.setIndex(new THREE.BufferAttribute(chunkIndices, 1));
+
+        // Every ground triangle owns its three vertices and one flat colour.
+        // Lighting and albedo now describe the same facet instead of smoothly
+        // interpolating a noisy vertex palette across the face.
+        const geo = indexed.toNonIndexed();
+        indexed.dispose();
+        const faceColors = geo.attributes.color;
+        for (let v = 0; v < faceColors.count; v += 3) {
+          const r = (faceColors.getX(v) + faceColors.getX(v + 1) + faceColors.getX(v + 2)) / 3;
+          const g = (faceColors.getY(v) + faceColors.getY(v + 1) + faceColors.getY(v + 2)) / 3;
+          const b = (faceColors.getZ(v) + faceColors.getZ(v + 1) + faceColors.getZ(v + 2)) / 3;
+          const hash = Math.sin((ci * 8191 + cj * 131071 + v) * 12.9898) * 43758.5453;
+          const tone = 0.945 + (hash - Math.floor(hash)) * 0.11;
+          for (let k = 0; k < 3; k += 1) faceColors.setXYZ(v + k, r * tone, g * tone, b * tone);
+        }
+        faceColors.needsUpdate = true;
         geo.computeVertexNormals();
         geo.computeBoundingSphere();
 

@@ -80,7 +80,7 @@ Opening `index.html` via `file://` will **not** work (module CORS).
 | `cannon-es` | 0.20.0 | `https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js` |
 | PeerJS | 1.5.1 | classic `<script>` — sets `window.Peer` (it has **no** ESM export) |
 
-Stylesheets: `./styles.css?v=10` and `./src/hud-styles.css?v=2`. Bump the query
+Stylesheets: `./styles.css?v=11` and `./src/hud-styles.css?v=4`. Bump the query
 string when you change them, because the dev server disables caching.
 
 ### 2.3 URL parameters / feature flags
@@ -98,6 +98,7 @@ Detection order for test mode: query → hash → localStorage.
 `INORLD.zip` is a distribution snapshot, rebuilt with:
 
 ```bash
+rm -f INORLD.zip
 zip -qr INORLD.zip index.html styles.css src serve.py README.md assets
 ```
 
@@ -114,9 +115,9 @@ a contract.
 
 | file | role |
 |---|---|
-| `index.html` (247) | canvas mount `#app`, lobby overlay, HUD skeleton, boot overlay, fatal overlay, toast, import map |
-| `styles.css` (1952) | all main-page styling: lobby, HUD legacy panels, touch cockpit, settings modal, responsive rules |
-| `src/hud-styles.css` (1410) | the ExpeditionHUD instrument cluster (own stylesheet, `?v=2`) |
+| `index.html` (252) | canvas mount `#app`, lobby overlay, HUD skeleton, boot overlay, fatal overlay, toast, import map |
+| `styles.css` (2014) | all main-page styling: lobby, HUD legacy panels, touch cockpit, settings modal, responsive rules |
+| `src/hud-styles.css` (1618) | the ExpeditionHUD instrument cluster and rounded Trail Atlas frame (own stylesheet, `?v=4`) |
 | `serve.py` (40) | static server described above |
 | `README.md` | one line: `# INORLD` |
 | `INORLD.zip` | distribution snapshot (see 2.4) |
@@ -130,7 +131,7 @@ a contract.
 |---|---|---|
 | `main.js` | ~1755 | composition root: renderer, scene, physics world, boot order, input, frame loop, **frame-rate governor**, `window.__game` |
 | `WorldAtlas.js` | 316 | `WORLD_SCALE`, `WORLD`, `REGIONS`, `regionAt()`, `ROADS`, `roadLength()`, `WATCHTOWERS`, `GAS_STATIONS`, `SIGNS` |
-| `TerrainSystem.js` | ~2347 | `mulberry32`, `makeNoise2D`, `fbm`, `BIOME`, `BIOMES`, `TerrainSystem` — heightfield, ground chunks, biome/prop scatter, LOD, collider streaming, foliage, water plane |
+| `TerrainSystem.js` | ~2597 | `mulberry32`, `makeNoise2D`, `fbm`, `BIOME`, `BIOMES`, `TerrainSystem` — heightfield, ground chunks, biome/prop scatter, LOD, collider streaming, foliage, water plane |
 | `ProvingGround.js` | 714 | `PROVING_GROUND`, `ZONES`, `zoneById`, `zoneAt`, `shapeProvingGround`, `resolveDatum`, `spawnPoint`, `auditProvingGround`, `createProvingProps`, `createProvingBench`, `createProvingHud` |
 | `OffroadVehicle.js` | ~1173 | `PHYS_GROUPS`, `SURFACES`, `OffroadVehicle`; also re-exports `VEHICLE_TUNE`, `VEHICLE_ACCESSORIES`, `VEHICLE_GEARS` |
 | `VehicleMeshBuilder.js` | 1299 | `PAINT_COLORS`, `PAINT_ORDER`, `PSI_RANGE`, `tireDeflation`, `effectiveTireRadius`, `ACCESSORIES`, `ACCESSORY_ORDER`, `VehicleMeshBuilder` (including static-body merge) |
@@ -149,7 +150,8 @@ a contract.
 | `WinchSystem.js` | 541 | `WinchSystem`: static anchors, truck-to-truck rescue, fuel transfer |
 | `NetworkManager.js` | 1180 | `STUN_SERVERS`, `MAX_PEERS`, `makeRoomCode`, `normaliseRoomCode`, `roomCodeToPeerId`, `isPeerIdValidForRoom`, `vehicleSnapshot`, `NetworkManager` |
 | `UIManager.js` | 905 | `UIManager`: lobby DOM, legacy HUD wiring, touch controls |
-| `ExpeditionHUD.js` | 918 | `ExpeditionHUD`: gear gate, CTIS cluster, drivetrain switches, expedition pill, mobile cockpit |
+| `ExpeditionHUD.js` | ~990 | `ExpeditionHUD`: gear gate, CTIS cluster, drivetrain switches, expedition pill, mobile cockpit; owns the single HUD update passed by `main.js` |
+| `TrailAtlas.js` | ~350 | `TrailAtlas`: rounded, heading-up local map made from cached triangular `Path2D` facets, final route polylines and an objective arrow |
 | `GraphicsSettingsUI.js` | 574 | `GraphicsSettingsUI`: three-tab settings drawer, hardware banner, live hot-swap |
 | `StyleDNA.js` | 203 | `TOON_RAMP`, `toonifyMaterial`, `toonify`, `addInkOutline`, `StyleDNA` |
 | `StyleOverhaul.js` | 437 | `PALETTE`, `applyStylePalette`, `StyleOverhaul` |
@@ -645,7 +647,8 @@ Authored in a 640 m design space, multiplied by **`WORLD_SCALE = 3.2`**:
 `WORLD = { size: 2048, half: 1024, waterLevel: 1.1 }`.
 
 Four regions, each with `bounds`, `palette` (ground, groundAlt, accent, fog,
-skyTint, sunTint, ambient, exposure, bloom) and a `shape(h, x, z)` height modifier:
+skyTint, sunTint, ambient, exposure, bloom). The legacy `shape(h, x, z)` modifiers remain
+in the atlas data, but the replacement terrain below owns the final landforms:
 
 | id | label | mood | bounds (design space) |
 |---|---|---|---|
@@ -689,13 +692,29 @@ Biomes (`BIOMES`, 7 keys `trail, hardpack, mud, sand, snow, rock, water`) carry
 grip 0.88 / viscosity 110 / rollResistance 0.028.
 
 Noise: seeded `mulberry32` → permutation → 2D simplex → `fbm(noise, x, y,
-octaves = 4, lacunarity = 2.03, gain = 0.5)`.
+octaves = 4, lacunarity = 2.03, gain = 0.5)`. Independent streams `noiseA/B/C`
+shape elevation and `noiseD` controls broad biome/albedo patches; changing palette
+noise cannot move the roads or physics.
+
+The replacement `_baseHeight()` uses domain-warped rolling ground, eastern cool
+granite shelves, a diagonal alpine ridge, pale southern coastal flats and a shallow
+bog. Snow depends on both altitude and slope. `riverHalfWidthAt(x)` varies the river
+width and opens its eastern reach into an estuary; the generated `river-run` trail
+follows that bank. Trail elevations use shared-junction relaxation with only ford
+elevations fixed at `FORD_FLOOR`. The retained audit of 601 authored legs reaches
+`0.20000000000000015`; 22 ford pins have a maximum queried depth of
+`0.2499999701976776 m`. Final same-seed regeneration again produced zero differences in
+heights, water, biome and slope grids; every height/water/slope sample was finite, the
+CANNON heightfield matched at every sample, and all 64 ground chunks were non-indexed
+with flat face colours. A 2.5 m surface sample can still measure `0.5490409337904016` at a
+complex crossing (`ridge`, near x 81.85 / z 347.57), so the authored grade limit is
+not a claim that every interpolated junction sample is below 0.2.
 
 ### 9.3 Build, physics, queries
 
 `await terrain.build(onProgress)` slices work and yields, reporting
 `(fraction, label)`. It creates: the ground mesh (chunked ×64, Lambert material,
-vertex colours, detail texture), the `CANNON.Heightfield` (`elementSize =
+one colour per triangle on non-indexed ground geometry, detail texture), the `CANNON.Heightfield` (`elementSize =
 ELEMENT`) added **always** to the world, water plane, prop scatter, foliage mask
 and meshes, and the LOD groups. Key methods:
 
@@ -745,16 +764,16 @@ Rules that keep it cheap and safe:
 - Builders bake transforms into geometry and leave the group at the origin, so
   `assemble()` can merge freely. Keep that convention when adding a model.
 
-### 9.6 Red-rock country (`MesaField`)
+### 9.6 Granite relief (`MesaField`)
 
 `TerrainSystem` owns the drivable ground, and its vertical scale is fixed by
 physics: 4.9 m cells, graded corridors, a carved river and trails that must stay
 under `TRAIL_MAX_GRADE`. A 90 m butte is therefore **scenery**, not heightfield.
 `MesaField` supplies the relief the heightfield cannot afford.
 
-The rock is no longer a canyon feature: mesas, palms and scrub are placed across
-the **whole 2 km map**, and every region's ground palette is the same sandstone
-family under its own light (§8.5, `WorldAtlas.REGIONS`).
+Mesas, palms and scrub are placed across the **whole 2 km map**. Their current
+strata are cool weathered granite, matching the canyon shelves rather than forcing
+the replacement terrain back into one sandstone family.
 
 | Set | How | Count (default seed) |
 | --- | --- | --- |
@@ -781,7 +800,7 @@ Rules:
 - **Non-indexed geometry on purpose.** `computeVertexNormals()` on a non-indexed
   soup gives one normal per face — that is the hard low-poly facet. Do not merge
   or index it.
-- **Strata are vertex colours**, `STRATA` bottom to top from oxidised red to
+- **Strata are vertex colours**, `STRATA` bottom to top through cool granite to
   pale caprock, with a per-face `shade()` jitter so two quads of the same band
   still separate.
 - **Profile is a wall, not a cone.** Rings alternate a barely-overhanging ledge
@@ -1026,8 +1045,8 @@ chart `[data-xh-map-wrap]` / `canvas[data-xh-map]`.
   objective label + live distance from `MissionManager.nextObjective()`, plus the
   **local chart**), mobile cockpit. Never owns simulation state; calls the same
   APIs as the keyboard.
-- `FieldChart` — the round heading-up chart inside the pill (§14.4). Owns only
-  its canvas.
+- `TrailAtlas` — the rounded-rectangle heading-up atlas inside the pill (§14.4).
+  Owns only its canvas and cached map geometry.
 - `GraphicsSettingsUI` — three tabs (Graphics & Performance / Controls & Mobile UI
   / Audio & Atmosphere), hardware banner, presets, every optimizer knob.
 - `main.js` — the legacy HUD element cache, `toast()`, and the co-op failure
@@ -1039,35 +1058,36 @@ chart `[data-xh-map-wrap]` / `canvas[data-xh-map]`.
 
 HUD/telemetry DOM: **12.5 Hz** (`hudRefresh >= 0.08`). FPS text and smoothing:
 10 Hz. Settings drawer: 12.5 Hz. Nothing else writes DOM per frame. The chart
-redraws on the same HUD tick, so it costs at most 12.5 blits a second.
+redraws on the same HUD tick, so it costs at most 12.5 redraws a second.
+`ExpeditionHUD.update()` deliberately has no second throttle.
 
-### 14.4 Local chart (`FieldChart`)
+### 14.4 Trail Atlas (`TrailAtlas`)
 
-Round and **heading-up**: the truck sits at the centre pointing up, the valley
-rotates under it, and the compass ring turns so `N` is really north. 400 m across
-(200 m radius), in the expedition pill under the NEXT/bearing rows. This replaced
-the earlier north-up raster minimap outright — no bitmap, no pixelated blit.
+A rounded rectangle and **heading-up**: the truck sits at the centre pointing up,
+terrain rotates beneath it, and a small north arrow counter-rotates. The short map
+edge shows a **200 m radius**; a **50 m** scale bar and objective distance stay
+visible. Sand, cool granite, snow and turquoise water match the new landscape.
 
-- **Vector, built once.** `_build()` halves the height grid to 209² (every second
-  terrain vertex, ~9.8 m cells), runs marching squares over it for four elevation
-  bands — levels taken from the height *quantiles* (18/42/66/86 %), because this
-  valley is a low plain and min/max levels left nine tenths of the chart blank —
-  and over the water depth grid for a shoreline and a deep-water fill, then turns
-  `ROADS` into road and trail `Path2D`s in world metres. Terrain is never sampled
-  per frame and nothing is rasterised.
-- **Per tick.** Clear, clip the circle, `rotate(-heading)`, scale (px/m), translate
-  to the truck; fill the bands, shore and deep water; stroke the contour hairlines,
-  the road casing + sand ribbon and the dashed trails; then draw the 100 m / 200 m
-  range rings, the ring and its 30° ticks with `N/E/S/W` placed at `bearing −
-  heading`, the cream chevron fixed at the centre, the objective and its distance
-  plate. Seven path fills/strokes and a dozen small shapes at 12.5 Hz.
-- **Objective.** Amber diamond at the target with a hairline to the truck while it
-  is inside the radius; beyond that, an amber arrowhead on the ring pointing the
-  way, plus a `m` / `km` plate along the bottom of the circle.
-- **Cost.** `chart.buildMs`, `chart.lastDrawMs` and `chart.segments` report the real
-  build time, per-frame cost and contour segment count.
-- **Style.** Flat fills, cream hairlines, one amber accent; the coarse contour step
-  keeps the drawing faceted rather than survey-grade.
+- **Built from final grids.** `_build()` reads `heights`, `waterGrid`, `biomeGrid`
+  and `slopeGrid` after terrain generation. Every fourth vertex produces two
+  triangles per cell: **21 632 cached triangular facets** in world metres. Region
+  colour, biome, water depth, elevation and slope choose a small flat palette. No
+  marching squares, elevation contours, raster minimap or per-frame grid sampling.
+- **Cached paths.** Triangles are bucketed by flat colour into `Path2D` objects;
+  the default seed currently produces 25 colour paths. Roads and trails come from
+  the final `terrain.trailPoints` / `pathNames`, including the generated River Run,
+  with atlas road kinds preserved. No geometry is allocated in `draw()`.
+- **Per tick.** Clip a rounded rectangle, apply one rotate/scale/translate, fill
+  the facet paths, stroke road casings/sand ribbons and dashed trails, then draw
+  the north arrow, scale, fixed truck chevron and objective. An on-map objective
+  is an amber diamond with a bearing hairline; an off-map objective becomes an
+  arrow clamped to the rounded frame, with a `m` / `km` distance readout.
+- **Cadence and diagnostics.** The single `main.js` HUD clock calls it at **12.5 Hz**.
+  `map.buildMs`, `lastDrawMs`, `facets`, `pathCount`, `rangeM` and `step` expose the
+  actual costs and construction. The final software-WebGL cloud run measured a 269.2 ms
+  one-off build and a latest draw reading of 0.2 ms; those are observations from
+  that single run, not a benchmark or a general frame-rate claim. Narrow headers wrap
+  instead of clipping the range/heading label.
 
 ---
 
@@ -1229,7 +1249,7 @@ hooks; prefer them over editing code to observe behaviour.
 | `__perf()` | prints and returns `{ fps, governorFps, target, scale, cap, degrade, tier, preset, calls, triangles, buffer, css, dpr, mesaTiles, boot }` |
 | `__inputs` | live `{ keys, held }` — what a stuck-key report should be checked against |
 | `__gamepad` | parsed pad state `{ connected, id, steer, throttle, brake, handbrake }` |
-| `__game.expeditionHUD.map` | the local chart: `{ base, buildMs, lastDrawMs, _size }` — the one-off bake and the real per-tick cost |
+| `__game.expeditionHUD.map` | the Trail Atlas: `{ buildMs, lastDrawMs, facets, pathCount, rangeM, step, _size }` — the one-off bake, real per-tick cost, cached geometry and backing-store size |
 | `INORLD_CAMERA` | localStorage key: the camera mode is restored at boot |
 | `INORLD_EXPEDITION` | localStorage key: `{ v, discovered[], bundlesDelivered, bundlesInTrailer, bridgeBuilt, savedAt }` — the solo/host expedition, restored in `MissionManager.setup()` |
 | `__fpsScale` | current dynamic pixel ratio |
@@ -1345,6 +1365,8 @@ frame, so read the stats after a render or via `captureRenderStats`.
 | high-res / 60 FPS | **native-resolution pass + gated boot**: governor target 120 → 60 with a native 1× floor and optional 1–2× supersampling; degradation now sheds post-FX/shadows/foliage/draw distance instead of shrinking the canvas; loading screen with a progress bar over an inert lobby, three rendered warm frames before release; `MesaField` rebaked into 256 m tiles (127 chunks, ~236k submitted triangles vs ~595k, 39.2k stone triangles); water 128² quads and 90/140 ms mirror cadence; station meshes merged and distance-culled; HIGH shadows 4096 → 2048 and DPR 2.5 → 2; MSAA enabled on LOW |
 | field chart | **the minimap was scrapped and rebuilt as a vector chart**: `FieldChart` (replacing `ExpeditionMap`) is round and heading-up — four marching-squares elevation bands whose levels are height quantiles (18/42/66/86 %, so the plain actually shades), a shoreline plus deep-water fill, road casings and dashed trails as `Path2D`s in world metres, 100/200 m range rings, a compass ring that turns (N/E/S/W at `bearing − heading`), the chevron pinned at the centre pointing up, and the next objective as an amber diamond, or a ring arrowhead plus a distance plate when it is off-chart; a frame is one clip and ten path fills/strokes, `chart.buildMs`/`lastDrawMs`/`segments` expose the costs; the bearing row was also corrected to measure compass angles from north (`atan2(x, −z)`) so its cardinal matches the ring |
 | local expedition | **progress persists**: `MissionManager` writes `INORLD_EXPEDITION` on every mission change (towers, delivered bundles, the load on the trailer, the bridge) and replays it during `setup()`; a joiner never writes the host's state to its own save, and the second HUD timer now reads `bundlesDelivered` instead of a field that never existed |
+| stage 1 terrain | **new deterministic landforms**: domain-warped rolling meadow, cool granite shelves, diagonal alpine ridge with slope-aware snow, pale coastal flats, variable-width river/estuary and bank-following River Run; independent elevation/palette noise streams, shared-junction grade relaxation, shallow ford pins and non-indexed one-colour-per-triangle ground. Same-seed regeneration produced zero differences in heights/water/biome/slope, CANNON differed by zero, and mission IDs/placements remained intact |
+| stage 1 atlas | **`TrailAtlas` replaces `FieldChart`**: rounded 200 m heading-up view, 21 632 cached triangular `Path2D` facets built from the final terrain grids, sand/granite/turquoise palette, final roads/trails, centred truck, objective/off-screen arrow and scale; old marching-squares/contour code deleted. Removed the second HUD throttle so `main.js` alone enforces 12.5 Hz; stylesheet cache bumped to `?v=4`, with wrapping narrow-screen atlas labels |
 | low-poly/sharp | **low-poly + crisp pass**: nine-tap unsharp-mask `ShaderPass` (strength 0.9, contrast-gated) after the grade, bloom strength cut across all phases and region palettes (0.34 → 0.16 max) with a 0.32 radius, grade contrast 1.1 → 1.16, five-sided trunks/poles, six-sided pines, 20-facet boulders, all flat-shaded |
 
 Earlier work still in force: 150 m chunked props with distance LOD and far proxies,
@@ -1372,10 +1394,12 @@ for f in src/*.js src/audio/*.js; do node --check "$f" || echo "FAIL $f"; done
 4. `?test`: the proving-ground audit table prints and every zone is reachable.
 5. Co-op: host a room, join from another tab with the code; both trucks mirror at
    20 Hz, mission and winch events propagate.
-6. Chart: in solo, the pill shows a north-up square with roads, the river and an
-   amber objective diamond; drive a curve and the chevron turns while the map
-   stays north-up. `__game.expeditionHUD.map.lastDrawMs` should be well under a
-   millisecond and `buildMs` a one-off on the first draw.
+6. Trail Atlas: in solo, the rounded rectangle shows faceted ground, turquoise
+   water, final roads/trails and a centred chevron pointing up; the terrain turns
+   beneath it and the north arrow still seeks north. The objective is amber inside
+   the 200 m view and an edge arrow outside it. Inspect
+   `__game.expeditionHUD.map.{buildMs,lastDrawMs,facets,pathCount}`; do not assume a
+   sub-millisecond draw on every device.
 7. Progress: scout a tower, deliver a bundle, reload — the tower stays scouted,
    `TIMBER` still shows the delivery and a finished bridge is still driveable
    (`__game.missionManager.getState()`). Join a room as a guest and confirm
